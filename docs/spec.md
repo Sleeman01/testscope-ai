@@ -2,7 +2,7 @@
 
 ## 1. Problem Statement
 
-QA engineers manually re-derive test coverage for every GitHub issue: reading the requirement, extracting acceptance criteria, searching the repo for related tests, judging what's covered, and writing up a test plan. This is repetitive, time-consuming, and error-prone — it's easy to miss edge cases, validation rules, permission scenarios, and boundary conditions, especially in large repos with many test files.
+QA engineers and developers already rely on automated code coverage tools (pytest-cov, Codecov, etc.) to know which lines of code execute during tests — but line/branch coverage doesn't answer whether a specific requirement is actually verified. Mapping acceptance criteria to existing tests, and judging whether a test's intent matches a criterion (not just its code path), remains a manual, repetitive task: reading the issue, searching the repo, opening candidate test files, and judging fit — one criterion at a time. This is time-consuming and error-prone at scale, especially for permission rules, boundary values, and negative cases that are easy to have partial or no test coverage for despite a high code-coverage percentage.
 
 **TestScope AI** is an AI agent that automates the first pass of this analysis: given a repository and a GitHub issue number, it retrieves the issue, extracts structured acceptance criteria, finds and reads relevant automated tests, classifies coverage per criterion, generates a full test plan, recommends missing test scenarios, and stores the analysis — with an optional user-approved step to file a GitHub issue for the gaps it finds.
 
