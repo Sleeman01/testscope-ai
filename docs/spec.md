@@ -237,9 +237,15 @@ testscope-ai/
 │   ├── plan.md
 │   └── test-plan.md
 ├── backend/
-│   ├── app/ (api, agent, models, services, storage, main.py)
-│   ├── tests/
-│   └── Dockerfile
+│   ├── api/            (FastAPI service — routes, request/response models, main.py)
+│   │   ├── app/
+│   │   ├── tests/
+│   │   └── Dockerfile
+│   ├── worker/         (LangGraph agent — nodes, SQS consumer, main.py)
+│   │   ├── app/
+│   │   ├── tests/
+│   │   └── Dockerfile
+│   └── shared/         (common models, DynamoDB/S3 clients, config — imported by both api/ and worker/)
 ├── mcp-server/
 │   ├── tools/
 │   ├── server.py
