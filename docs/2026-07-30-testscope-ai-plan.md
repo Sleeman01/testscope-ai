@@ -47,6 +47,7 @@ Copied verbatim from `docs/2026-07-30-testscope-ai-design.md` — every task's r
 9. **Phase 8** — CI/CD
 10. **Phase 9** — Observability
 11. **Phase 10** — local full-stack integration
+12. **Phase 11** — documentation (`docs/test-plan.md`, the assignment's separate test-plan deliverable)
 
 Each phase's tasks are ordered so every task lands with its own passing tests before the next depends on it.
 
@@ -830,7 +831,7 @@ git commit -m "feat(mcp-server): add save_coverage_report tool (DynamoDB + S3)"
 - Test: `mcp-server/tests/test_get_previous_analysis.py`
 
 **Interfaces:**
-- Consumes: `aws.get_dynamodb_table()` from Task 6. Assumes GSI1 (`repository_issue-index`, PK `repository_issue`, SK `created_at`) exists on the table — created in Terraform Task 28 and in each test's moto `create_table` call.
+- Consumes: `aws.get_dynamodb_table()` from Task 6. Assumes GSI1 (`repository_issue-index`, PK `repository_issue`, SK `created_at`) exists on the table — created in Terraform Task 29 and in each test's moto `create_table` call.
 - Produces: `get_previous_analysis(repository: str, issue_number: int) -> dict` → `{"analyses": [{analysis_id, created_at, status, coverage_summary, s3_report_key}]}`, newest first.
 
 - [ ] **Step 1: Write the failing test**
@@ -1086,11 +1087,13 @@ git commit -m "feat(mcp-server): wire FastMCP server, register all tools, add MC
 - [ ] **Step 7: Add `mcp-server/Dockerfile`**
 
 ```dockerfile
+# mcp-server/Dockerfile — built with repo-root build context (see Task 36's build command),
+# so every COPY is root-relative, not relative to this Dockerfile's own directory.
 FROM python:3.11-slim
 RUN apt-get update && apt-get install -y --no-install-recommends git && rm -rf /var/lib/apt/lists/*
 WORKDIR /app
-COPY pyproject.toml .
-COPY . .
+COPY mcp-server/pyproject.toml .
+COPY mcp-server/ .
 RUN pip install --no-cache-dir .
 RUN mkdir -p /workspace
 EXPOSE 8100
@@ -1548,21 +1551,139 @@ git add backend/worker/app backend/worker/tests backend/worker/pyproject.toml
 git commit -m "feat(worker): add AgentState, job_intake node, health endpoint, poll-loop skeleton"
 ```
 
-### Task 11: MCP client wrapper + Request Validator + Requirement Retriever nodes
+### Task 11: Retry utility + MCP client wrapper (retrying) + Request Validator + Requirement Retriever nodes
 
 **Files:**
+- Create: `backend/worker/retry.py` (package root, not under `app/` — see note in Step 1)
 - Create: `backend/worker/app/mcp_clients.py`
 - Create: `backend/worker/app/nodes/request_validator.py`
 - Create: `backend/worker/app/nodes/requirement_retriever.py`
-- Test: `backend/worker/tests/test_request_validator.py`, `test_requirement_retriever.py`
+- Test: `backend/worker/tests/test_retry.py`, `test_mcp_clients.py`, `test_request_validator.py`, `test_requirement_retriever.py`
 
 **Interfaces:**
 - Consumes: `AgentState` from Task 10.
-- Produces: `async def call_github_tool(tool_name: str, **kwargs) -> dict` and `async def call_test_mcp_tool(tool_name: str, **kwargs) -> dict` in `mcp_clients.py` (both open a `streamablehttp_client` session per call against `settings.mcp_github_url` / `settings.mcp_test_analysis_url`, matching the tool contracts from spec §5). Consumed by every remaining node task (13, 14, 15) and by Task 17's Report Saver/Cleanup.
-- Produces: `async def request_validator(state: AgentState) -> AgentState` (sets `state["default_branch"]`; sets `state["status"]="failed"` + `state["error_message"]` and short-circuits on not-found/access-denied — later graph wiring in Task 17 routes on `status`).
-- Produces: `async def requirement_retriever(state: AgentState) -> AgentState` (sets `state["issue_body"]`, `state["issue_comments"]`; on comment-fetch failure, sets `issue_comments=[]` and appends a warning instead of failing).
+- Produces: `async def with_retry(fn, *args, max_attempts: int = 3, backoff_base: float = 1.0, is_retryable: Callable[[Exception], bool] = lambda e: True, **kwargs) -> Any` in `retry.py` (package root, alongside `config.py`/`models.py`/`dynamodb.py` from `backend/shared` — importable the same bare way as `from retry import with_retry` in both tests and `app/` modules, with no other valid location). Re-raises immediately, without waiting or retrying further, the moment `is_retryable(exc)` returns `False` or attempts are exhausted. Default `is_retryable` always returns `True`, preserving unconditional-retry behavior for callers that don't need classification (Task 12's `call_llm` uses this default). Consumed by `mcp_clients.py` (this task, with a classifier) and by Task 12's `llm_client.py` (without one).
+- Produces: `async def call_github_tool(tool_name: str, **kwargs) -> dict` and `async def call_test_mcp_tool(tool_name: str, **kwargs) -> dict` in `mcp_clients.py` — both route through `with_retry` (3 attempts, 1s/2s/4s backoff) using `_is_retryable_tool_error`, a classifier that treats messages containing `404`/`not found`/`403`/`access denied`/`422`/`invalid` as terminal (fail immediately, no retry) and everything else (timeouts, 5xx, rate limits, connection errors) as retryable — implementing spec §4/§13's "transient errors retried 3x; validation/not-found/access-denied errors fail fast" distinction **once, at the client layer**, so every node that calls `call_github_tool`/`call_test_mcp_tool` gets it automatically rather than each node re-implementing its own retry/classification logic. Consumed by every remaining node task (13, 14, 15) and by Task 17's Report Saver/Cleanup.
+- Produces: `async def request_validator(state: AgentState) -> AgentState` (sets `state["default_branch"]`; sets `state["status"]="failed"` + `state["error_message"]` on the exception that reaches it — by the time anything reaches `request_validator`, `call_github_tool` has already retried transient errors and given up only on terminal ones, so this node's own logic stays a simple catch-and-fail with no error-type branching of its own — later graph wiring in Task 17 routes on `status`).
+- Produces: `async def requirement_retriever(state: AgentState) -> AgentState` (sets `state["issue_body"]`, `state["issue_comments"]`; on comment-fetch failure — meaning `call_github_tool` already retried and still failed — sets `issue_comments=[]` and appends a warning instead of failing).
 
-- [ ] **Step 1: Write failing tests using a fake MCP client**
+- [ ] **Step 1: Write failing tests for `with_retry`**
+
+```python
+# backend/worker/tests/test_retry.py
+import pytest
+from retry import with_retry
+
+@pytest.mark.asyncio
+async def test_succeeds_after_transient_failures():
+    calls = {"count": 0}
+    async def flaky():
+        calls["count"] += 1
+        if calls["count"] < 3:
+            raise TimeoutError("transient")
+        return "ok"
+    result = await with_retry(flaky, max_attempts=3, backoff_base=0.01)
+    assert result == "ok"
+    assert calls["count"] == 3
+
+@pytest.mark.asyncio
+async def test_reraises_after_exhausting_attempts():
+    async def always_fails():
+        raise TimeoutError("still failing")
+    with pytest.raises(TimeoutError):
+        await with_retry(always_fails, max_attempts=2, backoff_base=0.01)
+
+@pytest.mark.asyncio
+async def test_does_not_retry_when_is_retryable_returns_false():
+    calls = {"count": 0}
+    async def fails_terminally():
+        calls["count"] += 1
+        raise ValueError("404 Not Found")
+    with pytest.raises(ValueError):
+        await with_retry(fails_terminally, max_attempts=3, backoff_base=0.01, is_retryable=lambda e: "404" not in str(e))
+    assert calls["count"] == 1  # no retry attempted
+```
+
+- [ ] **Step 2: Run to verify failure, then implement `retry.py`**
+
+Run: `cd backend/worker && python -m pytest tests/test_retry.py -v` → FAIL (`ModuleNotFoundError`)
+
+```python
+# backend/worker/retry.py
+import asyncio
+from typing import Any, Callable
+
+def _always_retryable(exc: Exception) -> bool:
+    return True
+
+async def with_retry(
+    fn, *args,
+    max_attempts: int = 3,
+    backoff_base: float = 1.0,
+    is_retryable: Callable[[Exception], bool] = _always_retryable,
+    **kwargs,
+) -> Any:
+    for attempt in range(max_attempts):
+        try:
+            return await fn(*args, **kwargs)
+        except Exception as exc:
+            if not is_retryable(exc) or attempt >= max_attempts - 1:
+                raise
+            await asyncio.sleep(backoff_base * (2 ** attempt))
+```
+
+Place this at `backend/worker/retry.py` — package root, not `app/retry.py` — matching how `backend/shared`'s `config.py`/`models.py`/`dynamodb.py` are imported bare (`from config import get_settings`, not `from app.config import ...`) everywhere else in this plan. This is the one and only location; no other task moves or re-creates it.
+
+- [ ] **Step 3: Run to verify `with_retry` tests pass**
+
+Run: `cd backend/worker && python -m pytest tests/test_retry.py -v`
+Expected: PASS
+
+- [ ] **Step 4: Write failing tests for `mcp_clients.py`'s retry/classification behavior**
+
+```python
+# backend/worker/tests/test_mcp_clients.py
+import pytest
+from unittest.mock import AsyncMock, patch
+from app.mcp_clients import call_github_tool, _is_retryable_tool_error
+
+@pytest.mark.asyncio
+async def test_retries_transient_tool_error_then_succeeds():
+    calls = {"count": 0}
+    async def fake_call_once(base_url, tool_name, kwargs):
+        calls["count"] += 1
+        if calls["count"] < 2:
+            raise TimeoutError("connection reset")
+        return {"default_branch": "main"}
+    with patch("app.mcp_clients._call_once", new=AsyncMock(side_effect=fake_call_once)):
+        result = await call_github_tool("get_repository", owner="acme", repo="widgets")
+    assert result == {"default_branch": "main"}
+    assert calls["count"] == 2
+
+@pytest.mark.asyncio
+async def test_does_not_retry_not_found_error():
+    calls = {"count": 0}
+    async def fake_call_once(base_url, tool_name, kwargs):
+        calls["count"] += 1
+        raise Exception("404 Not Found")
+    with patch("app.mcp_clients._call_once", new=AsyncMock(side_effect=fake_call_once)):
+        with pytest.raises(Exception, match="404"):
+            await call_github_tool("get_repository", owner="acme", repo="does-not-exist")
+    assert calls["count"] == 1
+
+def test_classifier_treats_terminal_markers_as_non_retryable():
+    assert _is_retryable_tool_error(Exception("404 Not Found")) is False
+    assert _is_retryable_tool_error(Exception("403 access denied")) is False
+    assert _is_retryable_tool_error(TimeoutError("connection timed out")) is True
+    assert _is_retryable_tool_error(Exception("500 Internal Server Error")) is True
+```
+
+- [ ] **Step 5: Run to verify failure**
+
+Run: `cd backend/worker && python -m pytest tests/test_mcp_clients.py -v`
+Expected: FAIL — `ModuleNotFoundError`
+
+- [ ] **Step 6: Write failing tests for both nodes using a fake MCP client**
 
 ```python
 # backend/worker/tests/test_request_validator.py
@@ -1618,25 +1739,38 @@ async def test_falls_back_to_body_only_when_comments_fail():
     assert any("comment" in w.lower() for w in result["warnings"])
 ```
 
-- [ ] **Step 2: Run to verify failure**
+- [ ] **Step 7: Run to verify failure**
 
 Run: `cd backend/worker && python -m pytest tests/test_request_validator.py tests/test_requirement_retriever.py -v`
 Expected: FAIL — `ModuleNotFoundError`
 
-- [ ] **Step 3: Implement `mcp_clients.py` and both nodes**
+- [ ] **Step 8: Implement `mcp_clients.py` and both nodes**
 
 ```python
 # backend/worker/app/mcp_clients.py
 from mcp import ClientSession
 from mcp.client.streamable_http import streamablehttp_client
 from config import get_settings
+from retry import with_retry
 
-async def _call(base_url: str, tool_name: str, **kwargs) -> dict:
+TERMINAL_MARKERS = ("404", "not found", "403", "access denied", "422", "invalid")
+
+def _is_retryable_tool_error(exc: Exception) -> bool:
+    message = str(exc).lower()
+    return not any(marker in message for marker in TERMINAL_MARKERS)
+
+async def _call_once(base_url: str, tool_name: str, kwargs: dict) -> dict:
     async with streamablehttp_client(base_url) as (read, write, _):
         async with ClientSession(read, write) as session:
             await session.initialize()
             result = await session.call_tool(tool_name, kwargs)
             return result.structuredContent
+
+async def _call(base_url: str, tool_name: str, **kwargs) -> dict:
+    return await with_retry(
+        _call_once, base_url, tool_name, kwargs,
+        max_attempts=3, backoff_base=1.0, is_retryable=_is_retryable_tool_error,
+    )
 
 async def call_github_tool(tool_name: str, **kwargs) -> dict:
     return await _call(get_settings().mcp_github_url, tool_name, **kwargs)
@@ -1678,88 +1812,32 @@ async def requirement_retriever(state: dict) -> dict:
     return state
 ```
 
-- [ ] **Step 4: Run tests to verify they pass**
+- [ ] **Step 9: Run all this task's tests to verify they pass**
 
-Run: `cd backend/worker && python -m pytest tests/test_request_validator.py tests/test_requirement_retriever.py -v`
+Run: `cd backend/worker && python -m pytest tests/test_retry.py tests/test_mcp_clients.py tests/test_request_validator.py tests/test_requirement_retriever.py -v`
 Expected: PASS
 
-- [ ] **Step 5: Commit**
+- [ ] **Step 10: Commit**
 
 ```bash
-git add backend/worker/app/mcp_clients.py backend/worker/app/nodes/request_validator.py backend/worker/app/nodes/requirement_retriever.py backend/worker/tests/test_request_validator.py backend/worker/tests/test_requirement_retriever.py
-git commit -m "feat(worker): add MCP client wrapper, Request Validator and Requirement Retriever nodes"
+git add backend/worker/retry.py backend/worker/app/mcp_clients.py backend/worker/app/nodes/request_validator.py backend/worker/app/nodes/requirement_retriever.py backend/worker/tests/test_retry.py backend/worker/tests/test_mcp_clients.py backend/worker/tests/test_request_validator.py backend/worker/tests/test_requirement_retriever.py
+git commit -m "feat(worker): add retry utility, retrying MCP client wrapper (terminal vs transient classification), Request Validator and Requirement Retriever nodes"
 ```
 
 ### Task 12: LLM client wrapper + Requirement Parser node
 
 **Files:**
 - Create: `backend/worker/app/llm_client.py`
-- Create: `backend/worker/app/retry.py`
 - Create: `backend/worker/app/nodes/requirement_parser.py`
-- Test: `backend/worker/tests/test_llm_client.py`, `test_requirement_parser.py`
+- Test: `backend/worker/tests/test_requirement_parser.py` (`call_llm`'s retry behavior is already covered by Task 11's `test_retry.py`; its Anthropic-specific forced-tool-use behavior is exercised indirectly through every node test that mocks it, same as every other LLM node in this plan — no dedicated `llm_client` test needed)
 
 **Interfaces:**
-- Consumes: `AgentState` (`issue_body`, `issue_comments`) from Task 11.
-- Produces: `async def call_llm(system_prompt: str, user_prompt: str, response_model: type[BaseModel], tool_name: str) -> BaseModel` in `llm_client.py` — uses Claude's forced tool-use for structured output; wraps calls in `with_retry`. Consumed by every remaining LLM node (13, 14, 15).
-- Produces: `async def with_retry(fn, *args, max_attempts: int = 3, backoff_base: float = 1.0, **kwargs) -> Any` in `retry.py` — generic exponential-backoff wrapper (1s/2s/4s), re-raises after exhausting attempts. Consumed by `llm_client.call_llm` and by MCP tool calls in later tasks that need retry (Task 13's `find_test_files` call).
+- Consumes: `AgentState` (`issue_body`, `issue_comments`) from Task 11; `with_retry` from `backend/worker/retry.py` (Task 11 — **not** re-created here; this task only imports it).
+- Produces: `async def call_llm(system_prompt: str, user_prompt: str, response_model: type[BaseModel], tool_name: str) -> BaseModel` in `llm_client.py` — uses Claude's forced tool-use for structured output; wraps calls in `with_retry` using its default (unconditional-retry) classifier, since a malformed/unexpected LLM response is always worth retrying rather than requiring type-specific classification the way MCP/GitHub tool errors do. Consumed by every remaining LLM node (13, 14, 15).
 - Produces: `class AcceptanceCriterion(BaseModel)` (`id: str, text: str`), `class Requirement(BaseModel)` (`feature_name: str, business_objective: str, functional_requirements: list[str], acceptance_criteria: list[AcceptanceCriterion], validation_rules: list[str], user_roles: list[str], constraints: list[str], gaps: list[str]`) in `requirement_parser.py`.
 - Produces: `async def requirement_parser(state: AgentState) -> AgentState` — populates `state["requirement"]` (as a dict via `.model_dump()`); if `acceptance_criteria` is empty, sets `status="failed"`, `error_message="No acceptance criteria found in issue"`.
 
-- [ ] **Step 1: Write failing test for `with_retry`**
-
-```python
-# backend/worker/tests/test_llm_client.py
-import pytest
-from retry import with_retry
-
-@pytest.mark.asyncio
-async def test_with_retry_succeeds_after_transient_failures():
-    calls = {"count": 0}
-    async def flaky():
-        calls["count"] += 1
-        if calls["count"] < 3:
-            raise TimeoutError("transient")
-        return "ok"
-    result = await with_retry(flaky, max_attempts=3, backoff_base=0.01)
-    assert result == "ok"
-    assert calls["count"] == 3
-
-@pytest.mark.asyncio
-async def test_with_retry_reraises_after_exhausting_attempts():
-    async def always_fails():
-        raise TimeoutError("still failing")
-    with pytest.raises(TimeoutError):
-        await with_retry(always_fails, max_attempts=2, backoff_base=0.01)
-```
-
-- [ ] **Step 2: Run to verify failure, then implement `retry.py`**
-
-Run: `cd backend/worker && python -m pytest tests/test_llm_client.py -v` → FAIL (`ModuleNotFoundError`)
-
-```python
-# backend/worker/app/retry.py — note: imported as top-level `retry` per test above (package root on sys.path)
-import asyncio
-
-async def with_retry(fn, *args, max_attempts: int = 3, backoff_base: float = 1.0, **kwargs):
-    last_exc = None
-    for attempt in range(max_attempts):
-        try:
-            return await fn(*args, **kwargs)
-        except Exception as exc:
-            last_exc = exc
-            if attempt < max_attempts - 1:
-                await asyncio.sleep(backoff_base * (2 ** attempt))
-    raise last_exc
-```
-
-Place `retry.py` at `backend/worker/retry.py` (package root, alongside `config.py`/`models.py`/`dynamodb.py` re-exports — see Step 6 note) so it's importable the same way in both tests and `app/` modules.
-
-- [ ] **Step 3: Run to verify `with_retry` tests pass**
-
-Run: `cd backend/worker && python -m pytest tests/test_llm_client.py -v`
-Expected: PASS
-
-- [ ] **Step 4: Write failing test for `requirement_parser` with a stub LLM**
+- [ ] **Step 1: Write failing test for `requirement_parser` with a stub LLM**
 
 ```python
 # backend/worker/tests/test_requirement_parser.py
@@ -1797,12 +1875,12 @@ async def test_terminates_gracefully_when_no_criteria_found():
     assert "acceptance criteria" in result["error_message"].lower()
 ```
 
-- [ ] **Step 5: Run to verify failure**
+- [ ] **Step 2: Run to verify failure**
 
 Run: `cd backend/worker && python -m pytest tests/test_requirement_parser.py -v`
 Expected: FAIL — `ModuleNotFoundError`
 
-- [ ] **Step 6: Implement `llm_client.py` and `requirement_parser.py`**
+- [ ] **Step 3: Implement `llm_client.py` and `requirement_parser.py`**
 
 ```python
 # backend/worker/app/llm_client.py
@@ -1864,16 +1942,16 @@ async def requirement_parser(state: dict) -> dict:
     return state
 ```
 
-- [ ] **Step 7: Run tests to verify they pass**
+- [ ] **Step 4: Run tests to verify they pass**
 
 Run: `cd backend/worker && python -m pytest tests/test_requirement_parser.py -v`
 Expected: PASS
 
-- [ ] **Step 8: Commit**
+- [ ] **Step 5: Commit**
 
 ```bash
-git add backend/worker/retry.py backend/worker/app/llm_client.py backend/worker/app/nodes/requirement_parser.py backend/worker/tests/test_llm_client.py backend/worker/tests/test_requirement_parser.py
-git commit -m "feat(worker): add LLM client wrapper, retry utility, Requirement Parser node"
+git add backend/worker/app/llm_client.py backend/worker/app/nodes/requirement_parser.py backend/worker/tests/test_requirement_parser.py
+git commit -m "feat(worker): add LLM client wrapper (reusing Task 11's with_retry), Requirement Parser node"
 ```
 
 ### Task 13: Test Search Planner + Test File Retriever + Test File Classifier nodes
@@ -1887,7 +1965,7 @@ git commit -m "feat(worker): add LLM client wrapper, retry utility, Requirement 
 **Interfaces:**
 - Consumes: `state["requirement"]["acceptance_criteria"]` (Task 12), `call_llm` (Task 12), `call_test_mcp_tool` (Task 11).
 - Produces: `async def test_search_planner(state: AgentState) -> AgentState` — sets `state["search_keywords"]: list[str]`.
-- Produces: `async def test_file_retriever(state: AgentState) -> AgentState` — calls MCP `find_test_files`, sets `state["candidate_files"]: list[dict]` (empty list on no matches — not a failure).
+- Produces: `async def test_file_retriever(state: AgentState) -> AgentState` — calls MCP `find_test_files`, sets `state["candidate_files"]: list[dict]` (empty list on no matches — not a failure). Test discovery is best-effort: if `call_test_mcp_tool` itself raises (MCP server down, clone failure, etc.) even after Task 11's built-in retries are exhausted, the exception is caught here too, a warning is appended, and `candidate_files` is left `[]` rather than failing the whole analysis — losing the ability to find tests shouldn't block reporting "Not covered" for every criterion, which is a real, useful (if degraded) result.
 - Produces: `async def test_file_classifier(state: AgentState) -> AgentState` — calls MCP `extract_test_metadata` per candidate file, sets `state["test_metadata"]: dict[str, list[dict]]` keyed by file path; a single file's parse failure is caught, appended to `state["warnings"]`, and skipped (not fatal).
 
 - [ ] **Step 1: Write failing tests**
@@ -1931,6 +2009,16 @@ async def test_no_matches_is_not_a_failure():
         result = await test_file_retriever(state)
     assert result["candidate_files"] == []
     assert result.get("status") != "failed"
+
+@pytest.mark.asyncio
+async def test_search_failure_is_non_fatal():
+    state = {"repository": "acme/widgets", "default_branch": "main", "analysis_id": "a1",
+             "search_keywords": ["login"], "tool_call_trace": [], "warnings": []}
+    with patch("app.nodes.test_file_retriever.call_test_mcp_tool", new=AsyncMock(side_effect=Exception("mcp-test-analysis unreachable"))):
+        result = await test_file_retriever(state)
+    assert result["candidate_files"] == []
+    assert result.get("status") != "failed"
+    assert any("find_test_files" in w.lower() or "search" in w.lower() for w in result["warnings"])
 ```
 
 ```python
@@ -1989,11 +2077,15 @@ async def test_search_planner(state: dict) -> dict:
 from app.mcp_clients import call_test_mcp_tool
 
 async def test_file_retriever(state: dict) -> dict:
-    result = await call_test_mcp_tool(
-        "find_test_files", analysis_id=state["analysis_id"], repository=state["repository"],
-        ref=state["default_branch"], keywords=state["search_keywords"],
-    )
-    state["candidate_files"] = result["files"]
+    try:
+        result = await call_test_mcp_tool(
+            "find_test_files", analysis_id=state["analysis_id"], repository=state["repository"],
+            ref=state["default_branch"], keywords=state["search_keywords"],
+        )
+        state["candidate_files"] = result["files"]
+    except Exception as exc:
+        state["candidate_files"] = []
+        state.setdefault("warnings", []).append(f"find_test_files failed; continuing with no candidate files: {exc}")
     return state
 ```
 
@@ -2135,7 +2227,7 @@ git commit -m "feat(worker): add Coverage Analyzer node"
 
 **Interfaces:**
 - Consumes: `state["requirement"]`, `state["coverage_matrix"]` (Task 14), `call_llm` (Task 12).
-- Produces: `class TestCase(BaseModel)` (`id, title, requirement_id, preconditions: list[str], steps: list[str], test_data: str, expected_result: str, type: Literal[...9 categories from spec §4...], priority: Literal["low","medium","high"], automation_recommendation: str`). `async def test_plan_generator(state: AgentState) -> AgentState` sets `state["test_plan"]: list[dict]`.
+- Produces: `class TestCase(BaseModel)` (`id, title, requirement_id, preconditions: list[str], steps: list[str], test_data: str, expected_result: str, type: Literal[...10 categories from spec §4...], priority: Literal["low","medium","high"], automation_recommendation: str`). `async def test_plan_generator(state: AgentState) -> AgentState` sets `state["test_plan"]: list[dict]`.
 - Produces: `class MissingTest(BaseModel)` (`behavior: str, why_it_matters: str, suggested_type: str, suggested_priority: Literal["low","medium","high"], related_criterion_id: str, risk: str`). `async def missing_test_recommender(state: AgentState) -> AgentState` sets `state["missing_tests"]: list[dict]`.
 
 - [ ] **Step 1: Write failing tests**
@@ -2638,7 +2730,7 @@ def mcp_test_analysis_server():
     proc.wait(timeout=5)
 ```
 
-Because `find_test_files` calls out to `mcp-github` for the pre-clone size check, and this end-to-end test doesn't stand up a real `mcp-github`, the search step will raise — which is acceptable here since the assertions only need `test_file_retriever` to fail gracefully into an empty `candidate_files` list, not succeed. Adjust `test_file_retriever` (Task 13) to catch exceptions from `call_test_mcp_tool("find_test_files", ...)`, append a warning, and continue with `candidate_files=[]` rather than propagating — add this as a regression test in `test_test_file_retriever.py` (`test_search_failure_is_non_fatal`) before proceeding.
+Because `find_test_files` calls out to `mcp-github` for the pre-clone size check, and this end-to-end test doesn't stand up a real `mcp-github`, the search step will raise — which is fine: `test_file_retriever` (Task 13) already catches that exception and continues with `candidate_files=[]` rather than propagating, so this E2E test still reaches `status="completed"`.
 
 - [ ] **Step 8: Run to verify failure, then run for real**
 
@@ -2660,12 +2752,18 @@ git commit -m "feat(worker): wire full LangGraph agent (Report Saver, Cleanup, 1
 - [ ] **Step 11: Add `backend/worker/Dockerfile`**
 
 ```dockerfile
+# backend/worker/Dockerfile — built with repo-root build context (`docker build -f
+# backend/worker/Dockerfile .`, see Task 36/37/38's build commands and docker-compose.yml's
+# `context: ., dockerfile: backend/worker/Dockerfile`), so every COPY is root-relative.
+# `../shared` is NOT reachable from here: Docker forbids COPY paths outside the build
+# context, and the context is the repo root, not this directory.
 FROM python:3.11-slim
 WORKDIR /app
-COPY pyproject.toml .
-COPY ../shared /shared
-RUN pip install --no-cache-dir -e /shared && pip install --no-cache-dir .
-COPY . .
+COPY backend/shared /shared
+RUN pip install --no-cache-dir -e /shared
+COPY backend/worker/pyproject.toml .
+RUN pip install --no-cache-dir .
+COPY backend/worker/ .
 EXPOSE 8080
 CMD ["python", "app/main.py"]
 ```
@@ -3204,12 +3302,15 @@ git commit -m "feat(api): add POST /api/analyses/{id}/github-issue (gated, user-
 - [ ] **Step 7: Add `backend/api/Dockerfile`**
 
 ```dockerfile
+# backend/api/Dockerfile — same repo-root build context as backend/worker/Dockerfile
+# (Task 17); see that Dockerfile's header comment for why the paths are root-relative.
 FROM python:3.11-slim
 WORKDIR /app
-COPY pyproject.toml .
-COPY ../shared /shared
-RUN pip install --no-cache-dir -e /shared && pip install --no-cache-dir .
-COPY . .
+COPY backend/shared /shared
+RUN pip install --no-cache-dir -e /shared
+COPY backend/api/pyproject.toml .
+RUN pip install --no-cache-dir .
+COPY backend/api/ .
 EXPOSE 8000
 CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
 ```
@@ -3741,11 +3842,13 @@ git commit -m "feat(frontend): implement History page"
 - [ ] **Step 7: Add `frontend/Dockerfile` (multi-stage build served via nginx)**
 
 ```dockerfile
+# frontend/Dockerfile — same repo-root build context as backend/worker/Dockerfile
+# (Task 17); paths are root-relative. `nginx.conf` is added by Task 34.
 FROM node:20-slim AS build
 WORKDIR /app
-COPY package.json .
+COPY frontend/package.json .
 RUN npm install
-COPY . .
+COPY frontend/ .
 RUN npm run build
 
 FROM nginx:1.27-alpine
@@ -3766,16 +3869,14 @@ git commit -m "build(frontend): add multi-stage Dockerfile (nginx)"
 
 Infra tasks aren't TDD in the pytest sense; each task's "test" step is `terraform validate`/`plan` (and, where noted, an actual `apply` against a real AWS account — flagged explicitly since that's a real-money, real-infrastructure action the implementer should confirm before running).
 
-### Task 27: `networking` and `ec2` modules + `shared` environment (VPC, EC2 control-plane + worker, kubeadm bootstrap)
+### Task 27: `networking` module + `shared` environment scaffolding (VPC, security group)
 
 **Files:**
 - Create: `terraform/modules/networking/main.tf`, `variables.tf`, `outputs.tf`
-- Create: `terraform/modules/ec2/main.tf`, `variables.tf`, `outputs.tf`, `cloud-init-control-plane.yaml.tpl`, `cloud-init-worker.yaml.tpl`
 - Create: `terraform/environments/shared/main.tf`, `variables.tf`, `backend.tf`
 
 **Interfaces:**
-- Produces (`networking` module outputs): `vpc_id`, `public_subnet_id`, `security_group_id` — consumed by `ec2` module.
-- Produces (`ec2` module outputs): `control_plane_public_ip`, `control_plane_private_ip`, `control_plane_id`, `worker_public_ip`, `worker_id`, `worker_iam_role_arn` — consumed by Task 29 (deploy jobs need `control_plane_public_ip` for the self-hosted runner) and by `environments/dev`/`environments/prod` (Task 29) for IAM instance-profile attachment references.
+- Produces (`networking` module outputs): `vpc_id`, `public_subnet_id`, `security_group_id` — consumed by the `ec2` module (Task 28).
 
 - [ ] **Step 1: Write `networking` module**
 
@@ -3837,10 +3938,74 @@ output "public_subnet_id" { value = aws_subnet.public.id }
 output "security_group_id" { value = aws_security_group.k8s_cluster.id }
 ```
 
-- [ ] **Step 2: Write `ec2` module — control-plane + worker instances with kubeadm cloud-init bootstrap**
+- [ ] **Step 2: Write the `shared` environment root, wiring `networking` only — Task 28 adds the `ec2` module**
+
+```hcl
+# terraform/environments/shared/main.tf
+terraform {
+  required_version = ">= 1.5"
+  required_providers {
+    random = { source = "hashicorp/random", version = "~> 3.6" }
+    tls    = { source = "hashicorp/tls", version = "~> 4.0" }
+    local  = { source = "hashicorp/local", version = "~> 2.5" }
+  }
+}
+provider "aws" { region = var.aws_region }
+
+module "networking" {
+  source     = "../../modules/networking"
+  aws_region = var.aws_region
+  admin_cidr = var.admin_cidr
+}
+```
+
+`random`/`tls`/`local` aren't used yet in this step — they're declared here now because Task 28's `ec2` module needs all three (bootstrap token, generated SSH key pair) and Terraform aggregates provider requirements from the whole configuration at `init` time regardless of which module actually uses them; declaring them alongside `aws` here avoids a second `terraform init` surprise in Task 28.
+
+```hcl
+# terraform/environments/shared/variables.tf
+variable "aws_region" { type = string, default = "us-east-1" }
+variable "admin_cidr" { type = string }
+```
+
+Note what's deliberately **not** a variable here: an EC2 key pair name or AMI id requiring the user to have already clicked through the AWS console — Task 28's `ec2` module generates its own SSH key pair via Terraform (`tls_private_key` + `aws_key_pair`), so there's no manual pre-step.
+
+- [ ] **Step 3: Validate**
+
+Run: `cd terraform/environments/shared && terraform init && terraform validate`
+Expected: `Success! The configuration is valid.`
+
+- [ ] **Step 4: Commit**
+
+```bash
+git add terraform/modules/networking terraform/environments/shared
+git commit -m "feat(terraform): add networking module, shared environment scaffolding (VPC + security group)"
+```
+
+### Task 28: `ec2` module — control-plane + worker via kubeadm, generated SSH key pair, ingress exposed on 80/443, cluster-convergence verification
+
+**Files:**
+- Create: `terraform/modules/ec2/main.tf`, `variables.tf`, `outputs.tf`, `cloud-init-control-plane.yaml.tpl`, `cloud-init-worker.yaml.tpl`
+- Modify: `terraform/environments/shared/main.tf`, `variables.tf` (wire the `ec2` module)
+- Modify: `.gitignore` (never commit the generated private key)
+
+**Interfaces:**
+- Consumes: `public_subnet_id`, `security_group_id` (Task 27's `networking` module).
+- Produces (`ec2` module outputs): `control_plane_public_ip`, `control_plane_private_ip`, `control_plane_id`, `worker_public_ip`, `worker_id`, `worker_iam_role_arn`, `ssh_private_key_path` — consumed by Task 30 (deploy jobs need `control_plane_public_ip` for the self-hosted runner) and by `environments/dev`/`environments/prod` (Task 30) for IAM instance-profile attachment references.
+- No `key_pair_name` or `ami_id` input variable — the key pair is generated by this module (`tls_private_key`/`aws_key_pair`), and the AMI is looked up via a `data "aws_ami"` filter (latest Ubuntu 22.04 in the target region), so nothing here requires a manual AWS console step before `terraform apply`.
+
+- [ ] **Step 1: Write the `ec2` module — IAM role, generated key pair, AMI lookup, kubeadm bootstrap token**
 
 ```hcl
 # terraform/modules/ec2/main.tf
+data "aws_ami" "ubuntu" {
+  most_recent = true
+  owners      = ["099720109477"]  # Canonical
+  filter {
+    name   = "name"
+    values = ["ubuntu/images/hvm-ssd/ubuntu-jammy-22.04-amd64-server-*"]
+  }
+}
+
 resource "aws_iam_role" "worker" {
   name = "testscope-k8s-worker-role"
   assume_role_policy = jsonencode({
@@ -3852,6 +4017,23 @@ resource "aws_iam_role" "worker" {
 resource "aws_iam_instance_profile" "worker" {
   name = "testscope-k8s-worker-profile"
   role = aws_iam_role.worker.name
+}
+
+# Generated entirely by Terraform — no "create a key pair in the console first" step.
+resource "tls_private_key" "ssh" {
+  algorithm = "RSA"
+  rsa_bits  = 4096
+}
+
+resource "aws_key_pair" "cluster" {
+  key_name   = "testscope-k8s-keypair"
+  public_key = tls_private_key.ssh.public_key_openssh
+}
+
+resource "local_sensitive_file" "ssh_private_key" {
+  content         = tls_private_key.ssh.private_key_pem
+  filename        = "${path.root}/testscope-k8s-keypair.pem"
+  file_permissions = "0600"
 }
 
 # kubeadm bootstrap token, format [a-z0-9]{6}.[a-z0-9]{16} — generated once so both
@@ -3873,11 +4055,11 @@ locals {
 }
 
 resource "aws_instance" "control_plane" {
-  ami                    = var.ami_id
+  ami                    = data.aws_ami.ubuntu.id
   instance_type          = var.instance_type
   subnet_id              = var.public_subnet_id
   vpc_security_group_ids = [var.security_group_id]
-  key_name               = var.key_pair_name
+  key_name               = aws_key_pair.cluster.key_name
   user_data = templatefile("${path.module}/cloud-init-control-plane.yaml.tpl", {
     kubeadm_token = local.kubeadm_token
   })
@@ -3887,12 +4069,12 @@ resource "aws_instance" "control_plane" {
 }
 
 resource "aws_instance" "worker" {
-  ami                    = var.ami_id
+  ami                    = data.aws_ami.ubuntu.id
   instance_type          = var.instance_type
   subnet_id              = var.public_subnet_id
   vpc_security_group_ids = [var.security_group_id]
   iam_instance_profile   = aws_iam_instance_profile.worker.name
-  key_name               = var.key_pair_name
+  key_name               = aws_key_pair.cluster.key_name
   user_data = templatefile("${path.module}/cloud-init-worker.yaml.tpl", {
     kubeadm_token             = local.kubeadm_token
     control_plane_private_ip = aws_instance.control_plane.private_ip
@@ -3902,6 +4084,8 @@ resource "aws_instance" "worker" {
   tags = { Name = "testscope-k8s-worker" }
 }
 ```
+
+- [ ] **Step 2: Write the control-plane cloud-init — containerd, kubeadm init, Calico, nginx-ingress exposed on host ports 80/443, metrics-server**
 
 ```yaml
 # terraform/modules/ec2/cloud-init-control-plane.yaml.tpl
@@ -3924,9 +4108,15 @@ runcmd:
   - kubectl --kubeconfig=/etc/kubernetes/admin.conf create namespace prod
   - kubectl --kubeconfig=/etc/kubernetes/admin.conf create namespace monitoring
   - kubectl --kubeconfig=/etc/kubernetes/admin.conf apply -f https://raw.githubusercontent.com/kubernetes/ingress-nginx/controller-v1.11.0/deploy/static/provider/baremetal/deploy.yaml
+  - until kubectl --kubeconfig=/etc/kubernetes/admin.conf get deployment ingress-nginx-controller -n ingress-nginx >/dev/null 2>&1; do sleep 5; done
+  - kubectl --kubeconfig=/etc/kubernetes/admin.conf patch deployment ingress-nginx-controller -n ingress-nginx --type=json -p='[{"op":"add","path":"/spec/template/spec/hostNetwork","value":true},{"op":"replace","path":"/spec/template/spec/dnsPolicy","value":"ClusterFirstWithHostNet"}]'
   - kubectl --kubeconfig=/etc/kubernetes/admin.conf apply -f https://github.com/kubernetes-sigs/metrics-server/releases/latest/download/components.yaml
   - kubectl --kubeconfig=/etc/kubernetes/admin.conf patch deployment metrics-server -n kube-system --type=json -p='[{"op":"add","path":"/spec/template/spec/containers/0/args/-","value":"--kubelet-insecure-tls"}]'
 ```
+
+**Why the `hostNetwork` patch (fixes a real gap, not a stylistic choice):** the baremetal `ingress-nginx` manifest creates a `NodePort` Service by default — reachable only on a random high port (30000–32767), not 80/443. k3s's bundled Traefik avoided this because k3s ships its own `ServiceLB` component that auto-binds host ports for `LoadBalancer`-type Services; vanilla kubeadm has no equivalent. Patching the controller to `hostNetwork: true` makes it bind directly to ports 80/443 on whichever node it lands on. Since the control-plane keeps its default `NoSchedule` taint (§10), the ingress-nginx pod — like every other pod — schedules onto the worker node, whose public IP is exactly what the security group opens 80/443 for and what `dev.testscope.local`/`testscope.local` are expected to resolve to.
+
+- [ ] **Step 3: Write the worker cloud-init — containerd, kubeadm join**
 
 ```yaml
 # terraform/modules/ec2/cloud-init-worker.yaml.tpl
@@ -3944,15 +4134,15 @@ runcmd:
   - kubeadm join ${control_plane_private_ip}:6443 --token=${kubeadm_token} --discovery-token-unsafe-skip-ca-verification
 ```
 
-**Stated tradeoff — `--discovery-token-unsafe-skip-ca-verification`:** the worker joins without verifying the control-plane's CA cert hash, since automating that handoff (fetching the live cert hash into Terraform mid-apply) adds meaningful complexity for a two-node, same-VPC, single-security-group demo cluster. A production setup would pass `--discovery-token-ca-cert-hash` instead.
+**Stated tradeoffs:**
+- `--token-ttl=0` on `kubeadm init` makes the bootstrap token never expire, so a slow/retried worker boot can't fail on an expired token — and, per Step 5 below, the same token is still valid if you need to re-run `kubeadm join` by hand after a failure.
+- `--discovery-token-unsafe-skip-ca-verification`: the worker joins without verifying the control-plane's CA cert hash, since automating that handoff (fetching the live cert hash into Terraform mid-apply) adds meaningful complexity for a two-node, same-VPC, single-security-group demo cluster. A production setup would pass `--discovery-token-ca-cert-hash` instead.
 
 ```hcl
 # terraform/modules/ec2/variables.tf
-variable "ami_id" { type = string, description = "Ubuntu 22.04 LTS AMI id for the target region" }
 variable "instance_type" { type = string, default = "t3.large" }
 variable "public_subnet_id" { type = string }
 variable "security_group_id" { type = string }
-variable "key_pair_name" { type = string }
 ```
 
 ```hcl
@@ -3963,58 +4153,53 @@ output "control_plane_id" { value = aws_instance.control_plane.id }
 output "worker_public_ip" { value = aws_instance.worker.public_ip }
 output "worker_id" { value = aws_instance.worker.id }
 output "worker_iam_role_arn" { value = aws_iam_role.worker.arn }
+output "ssh_private_key_path" { value = local_sensitive_file.ssh_private_key.filename }
 ```
 
+- [ ] **Step 4: Wire the `ec2` module into the `shared` environment**
+
 ```hcl
-# terraform/environments/shared/main.tf
-terraform {
-  required_version = ">= 1.5"
-  required_providers {
-    random = { source = "hashicorp/random", version = "~> 3.6" }
-  }
-}
-provider "aws" { region = var.aws_region }
-
-module "networking" {
-  source     = "../../modules/networking"
-  aws_region = var.aws_region
-  admin_cidr = var.admin_cidr
-}
-
+# terraform/environments/shared/main.tf — append below the `networking` module block from Task 27
 module "ec2" {
   source             = "../../modules/ec2"
-  ami_id             = var.ami_id
   public_subnet_id   = module.networking.public_subnet_id
   security_group_id  = module.networking.security_group_id
-  key_pair_name      = var.key_pair_name
 }
 
 output "control_plane_public_ip" { value = module.ec2.control_plane_public_ip }
 output "worker_public_ip" { value = module.ec2.worker_public_ip }
 output "worker_iam_role_arn" { value = module.ec2.worker_iam_role_arn }
+output "ssh_private_key_path" { value = module.ec2.ssh_private_key_path }
 ```
-
-```hcl
-# terraform/environments/shared/variables.tf
-variable "aws_region" { type = string, default = "us-east-1" }
-variable "admin_cidr" { type = string }
-variable "ami_id" { type = string }
-variable "key_pair_name" { type = string }
-```
-
-- [ ] **Step 3: Validate**
-
-Run: `cd terraform/environments/shared && terraform init && terraform validate`
-Expected: `Success! The configuration is valid.`
-
-- [ ] **Step 4: Commit**
 
 ```bash
-git add terraform/modules/networking terraform/modules/ec2 terraform/environments/shared
-git commit -m "feat(terraform): add networking and ec2 modules, shared environment (VPC + kubeadm control-plane/worker)"
+# .gitignore — append
+*.pem
+terraform/environments/shared/testscope-k8s-keypair.pem
 ```
 
-### Task 28: `iam`, `s3`, `dynamodb`, `sqs` modules (parameterized by env)
+- [ ] **Step 5: Apply and verify the cluster actually converged**
+
+This is the step the original plan skipped — `terraform validate` only checks HCL syntax, it proves nothing about whether `kubeadm join` actually succeeded on the worker.
+
+Run:
+```bash
+cd terraform/environments/shared && terraform init && terraform apply
+ssh -o StrictHostKeyChecking=no -i testscope-k8s-keypair.pem ubuntu@$(terraform output -raw control_plane_public_ip) \
+  'kubectl get nodes -o wide && kubectl get pods -n ingress-nginx -o wide && kubectl get pods -n kube-system -l k8s-app=metrics-server'
+```
+Expected: two nodes listed, both `STATUS=Ready` (control-plane and worker); an `ingress-nginx-controller` pod `Running` whose `HOST-IP` and `IP` columns are equal (proof `hostNetwork: true` took effect — a `Running` status alone doesn't confirm that); a `metrics-server` pod `Running`.
+
+**If the worker is `NotReady` or missing entirely from `kubectl get nodes`:** `kubeadm join` failed during boot — most likely a transient timing issue, not a config error, since the token never expires. SSH into the *worker* (`ubuntu@$(terraform output -raw worker_public_ip)`) and check `sudo cat /var/log/cloud-init-output.log` for the failure, then re-run by hand: `sudo kubeadm join <control_plane_private_ip>:6443 --token=<token> --discovery-token-unsafe-skip-ca-verification` (the exact command cloud-init ran — copy it from that same log). No token regeneration needed.
+
+- [ ] **Step 6: Commit**
+
+```bash
+git add terraform/modules/ec2 terraform/environments/shared .gitignore
+git commit -m "feat(terraform): add ec2 module (kubeadm control-plane+worker, generated SSH key, nginx-ingress hostNetwork), cluster verification step"
+```
+
+### Task 29: `iam`, `s3`, `dynamodb`, `sqs` modules (parameterized by env)
 
 **Files:**
 - Create: `terraform/modules/iam/main.tf`, `variables.tf`
@@ -4023,7 +4208,7 @@ git commit -m "feat(terraform): add networking and ec2 modules, shared environme
 - Create: `terraform/modules/sqs/main.tf`, `variables.tf`, `outputs.tf`
 
 **Interfaces:**
-- Each module takes `var.env` (`"dev"`/`"prod"`) and names resources accordingly (`testscope-reports-${var.env}`, `testscope-analyses-${var.env}`, `testscope-jobs-${var.env}`), matching spec §6/§9 exactly. Outputs (`bucket_name`, `table_name`, `queue_url`, `dlq_url`) are consumed by Task 29's `dev`/`prod` environments and end up in K8s ConfigMaps (Task 34).
+- Each module takes `var.env` (`"dev"`/`"prod"`) and names resources accordingly (`testscope-reports-${var.env}`, `testscope-analyses-${var.env}`, `testscope-jobs-${var.env}`), matching spec §6/§9 exactly. Outputs (`bucket_name`, `table_name`, `queue_url`, `dlq_url`) are consumed by Task 30's `dev`/`prod` environments and end up in K8s ConfigMaps (Task 35).
 
 - [ ] **Step 1: Write `s3` module**
 
@@ -4169,7 +4354,7 @@ git add terraform/modules/iam terraform/modules/s3 terraform/modules/dynamodb te
 git commit -m "feat(terraform): add iam, s3, dynamodb, sqs modules parameterized by env"
 ```
 
-### Task 29: `monitoring` module + `dev`/`prod` environments
+### Task 30: `monitoring` module + `dev`/`prod` environments
 
 **Files:**
 - Create: `terraform/modules/monitoring/main.tf`, `variables.tf`
@@ -4177,8 +4362,8 @@ git commit -m "feat(terraform): add iam, s3, dynamodb, sqs modules parameterized
 - Create: `terraform/environments/prod/main.tf`, `variables.tf`, `backend.tf`
 
 **Interfaces:**
-- Consumes: `worker_iam_role_arn`, `control_plane_public_ip`, `worker_public_ip` outputs from `environments/shared` (Task 27, referenced via `terraform_remote_state` data source) and the `s3`/`dynamodb`/`sqs`/`iam` modules (Task 28).
-- Produces: per-env `bucket_name`, `table_name`, `queue_url` outputs — consumed directly by Task 34's K8s ConfigMap values (copied in manually per spec's "no manual clicking" caveat being about AWS resources, not about transcribing Terraform outputs into K8s config, which is standard practice; Task 34 documents this as a required manual step between `terraform apply` and `kubectl apply`).
+- Consumes: `worker_iam_role_arn`, `control_plane_public_ip`, `worker_public_ip` outputs from `environments/shared` (Task 27, referenced via `terraform_remote_state` data source) and the `s3`/`dynamodb`/`sqs`/`iam` modules (Task 29).
+- Produces: per-env `bucket_name`, `table_name`, `queue_url` outputs — consumed directly by Task 35's K8s ConfigMap values (copied in manually per spec's "no manual clicking" caveat being about AWS resources, not about transcribing Terraform outputs into K8s config, which is standard practice; Task 35 documents this as a required manual step between `terraform apply` and `kubectl apply`).
 
 - [ ] **Step 1: Write `monitoring` module (CloudWatch alarms + SNS, per spec §12)**
 
@@ -4284,7 +4469,7 @@ git add terraform/modules/monitoring terraform/environments/dev terraform/enviro
 git commit -m "feat(terraform): add monitoring module (CloudWatch alarms + SNS), dev/prod environments"
 ```
 
-### Task 30: Terraform validation and documented apply order
+### Task 31: Terraform validation and documented apply order
 
 **Files:**
 - Create: `terraform/README.md`
@@ -4308,10 +4493,10 @@ Expected: `Success!` for all three
 
 ## Apply order (real AWS resources — confirm account, region, and budget first)
 
-1. `cd terraform/environments/shared && terraform init && terraform apply` — provisions the VPC and the two-node kubeadm cluster (control-plane + worker). Note `control_plane_public_ip` from the output; you'll need it for `kubectl` access and CI's self-hosted runner registration.
+1. `cd terraform/environments/shared && terraform init && terraform apply` — provisions the VPC and the two-node kubeadm cluster (control-plane + worker), including a generated SSH key pair (written to `testscope-k8s-keypair.pem` in this directory, gitignored — no pre-existing AWS key pair needed). Note `control_plane_public_ip` from the output; you'll need it, together with that `.pem` file, for `kubectl`/`ssh` access and CI's self-hosted runner registration. Run Task 28's cluster-convergence check (`kubectl get nodes` via SSH) before moving on to step 2.
 2. `cd terraform/environments/dev && terraform init && terraform apply` — provisions dev's S3 bucket, DynamoDB table, SQS queues, IAM policy, CloudWatch alarms.
 3. `cd terraform/environments/prod && terraform init && terraform apply` — same, for prod.
-4. Copy each environment's `bucket_name`/`table_name`/`queue_url` outputs into the matching Kubernetes ConfigMap (`kubernetes/dev/configmap.yaml` / `kubernetes/prod/configmap.yaml`, Task 34) — this hand-off is manual by design (Terraform provisions AWS resources; it does not template Kubernetes manifests).
+4. Copy each environment's `bucket_name`/`table_name`/`queue_url` outputs into the matching Kubernetes ConfigMap (`kubernetes/dev/configmap.yaml` / `kubernetes/prod/configmap.yaml`, Task 35) — this hand-off is manual by design (Terraform provisions AWS resources; it does not template Kubernetes manifests).
 5. Tear-down order is the reverse: `prod` → `dev` → `shared` (`terraform destroy` in each), since `dev`/`prod` reference the shared worker instance role by name.
 ```
 
@@ -4326,9 +4511,9 @@ git commit -m "docs(terraform): document validated fmt/validate pass and apply o
 
 ## Phase 7 — Kubernetes Manifests (kubeadm cluster)
 
-Base manifests are environment-agnostic; `kustomize` overlays (Task 34) patch in per-namespace values. Every manifest that needs a real image reference uses `ghcr.io/<org>/testscope-<service>:latest` as a placeholder tag — Task 34's overlays pin the actual tag (set by CI, Task 36/37).
+Base manifests are environment-agnostic; `kustomize` overlays (Task 35) patch in per-namespace values. Every manifest that needs a real image reference uses `ghcr.io/<org>/testscope-<service>:latest` as a placeholder tag — Task 35's overlays pin the actual tag (set by CI, Task 37/38).
 
-### Task 31: Base `api` and `worker` manifests
+### Task 32: Base `api` and `worker` manifests
 
 **Files:**
 - Create: `kubernetes/base/api/deployment.yaml`, `service.yaml`
@@ -4413,7 +4598,7 @@ kind: ConfigMap
 metadata:
   name: testscope-config
 data:
-  ENV: "base"  # overridden per-namespace in Task 34
+  ENV: "base"  # overridden per-namespace in Task 35
   LOG_LEVEL: "INFO"
   DYNAMODB_TABLE: "REPLACED_BY_OVERLAY"
   S3_BUCKET: "REPLACED_BY_OVERLAY"
@@ -4445,14 +4630,14 @@ git add kubernetes/base/api kubernetes/base/worker kubernetes/base/configmap.yam
 git commit -m "feat(k8s): add base api and worker manifests (probes, resource limits)"
 ```
 
-### Task 32: `mcp-test-analysis` and `mcp-github` manifests
+### Task 33: `mcp-test-analysis` and `mcp-github` manifests
 
 **Files:**
 - Create: `kubernetes/base/mcp-test-analysis/deployment.yaml`, `service.yaml`, `secret.yaml.example`
 - Create: `kubernetes/base/mcp-github/deployment.yaml`, `service.yaml`
 - Modify: `kubernetes/base/kustomization.yaml` (add both)
 
-**Interfaces:** `mcp-test-analysis` Service DNS name `mcp-test-analysis:8100` and `mcp-github` Service DNS name `mcp-github:8100` are exactly the values baked into `kubernetes/base/configmap.yaml`'s `MCP_TEST_ANALYSIS_URL`/`MCP_GITHUB_URL` from Task 31 — keep these in sync if either Service name changes.
+**Interfaces:** `mcp-test-analysis` Service DNS name `mcp-test-analysis:8100` and `mcp-github` Service DNS name `mcp-github:8100` are exactly the values baked into `kubernetes/base/configmap.yaml`'s `MCP_TEST_ANALYSIS_URL`/`MCP_GITHUB_URL` from Task 32 — keep these in sync if either Service name changes.
 
 - [ ] **Step 1: Write `mcp-test-analysis` manifests (with the `/workspace` emptyDir + sizeLimit from spec §10)**
 
@@ -4568,7 +4753,7 @@ spec:
   ports: [{ port: 8100, targetPort: 8100 }]
 ```
 
-`mcp-github` uses its **own** `github-token` Secret instance (per-namespace, created independently of `mcp-test-analysis`'s) — both reference the same Secret *name* for manifest simplicity, but each namespace's overlay (Task 34) supplies its own Secret value; this still satisfies spec §5.1's "own K8s Secret" requirement since it's not shared across namespaces or read by `worker`/`api`.
+`mcp-github` uses its **own** `github-token` Secret instance (per-namespace, created independently of `mcp-test-analysis`'s) — both reference the same Secret *name* for manifest simplicity, but each namespace's overlay (Task 35) supplies its own Secret value; this still satisfies spec §5.1's "own K8s Secret" requirement since it's not shared across namespaces or read by `worker`/`api`.
 
 **Note:** verify the exact tool names/parameters against the installed `github-mcp-server` version's tool list (e.g. `docker run ghcr.io/github/github-mcp-server --help` or its README) before wiring Task 11/22's `get_repository`/`get_issue`/`get_issue_comments`/`create_issue` calls against a real deployment — this plan assumes those names per spec §5.2 but the upstream project's exact naming should be confirmed once, in this task, and any mismatch fixed in the two call sites (`backend/worker/app/mcp_clients.py`, `backend/api/app/mcp_client.py`) plus `mcp-server/github_client.py`.
 
@@ -4592,7 +4777,7 @@ git add kubernetes/base/mcp-test-analysis kubernetes/base/mcp-github kubernetes/
 git commit -m "feat(k8s): add mcp-test-analysis and mcp-github manifests; add health endpoints to mcp-server"
 ```
 
-### Task 33: `frontend` manifests + Ingress (nginx-ingress)
+### Task 34: `frontend` manifests + Ingress (nginx-ingress)
 
 **Files:**
 - Create: `kubernetes/base/frontend/deployment.yaml`, `service.yaml`
@@ -4637,7 +4822,7 @@ spec:
   ports: [{ port: 80, targetPort: 80 }]
 ```
 
-Add `frontend/nginx.conf` (referenced by the `frontend/Dockerfile` from Task 26 — extend that Dockerfile's final stage to `COPY nginx.conf /etc/nginx/conf.d/default.conf`):
+Add `frontend/nginx.conf` (referenced by the `frontend/Dockerfile` from Task 26 — extend that Dockerfile's final stage to `COPY frontend/nginx.conf /etc/nginx/conf.d/default.conf`, root-relative like every other `COPY` in that file):
 
 ```nginx
 # frontend/nginx.conf
@@ -4660,7 +4845,7 @@ metadata:
 spec:
   ingressClassName: nginx
   rules:
-    - host: REPLACED_BY_OVERLAY  # dev.testscope.local / testscope.local, see Task 34
+    - host: REPLACED_BY_OVERLAY  # dev.testscope.local / testscope.local, see Task 35
       http:
         paths:
           - path: /
@@ -4687,14 +4872,14 @@ git add kubernetes/base/frontend kubernetes/base/ingress.yaml kubernetes/base/ku
 git commit -m "feat(k8s): add frontend manifests, nginx-ingress Ingress, nginx API proxy config"
 ```
 
-### Task 34: `dev`/`prod` kustomize overlays (namespace, HPA, env-specific config) + validation
+### Task 35: `dev`/`prod` kustomize overlays (namespace, HPA, env-specific config) + validation
 
 **Files:**
 - Create: `kubernetes/dev/kustomization.yaml`, `configmap-patch.yaml`, `hpa.yaml`, `ingress-patch.yaml`
 - Create: `kubernetes/prod/kustomization.yaml`, `configmap-patch.yaml`, `hpa.yaml`, `ingress-patch.yaml`
 - Create: `kubernetes/monitoring/namespace.yaml` (placeholder namespace resource; Prometheus/Grafana/Loki manifests land here in Phase 9)
 
-**Interfaces:** consumes Terraform outputs from Task 29/30 (`bucket_name`, `table_name`, `queue_url`) as the literal values in each `configmap-patch.yaml` — this is the manual hand-off documented in Task 30's `terraform/README.md`.
+**Interfaces:** consumes Terraform outputs from Task 30/31 (`bucket_name`, `table_name`, `queue_url`) as the literal values in each `configmap-patch.yaml` — this is the manual hand-off documented in Task 31's `terraform/README.md`.
 
 - [ ] **Step 1: Write the `dev` overlay**
 
@@ -4846,7 +5031,7 @@ git commit -m "feat(k8s): add dev/prod kustomize overlays (namespaces, HPA, env 
 
 ## Phase 8 — CI/CD (GitHub Actions)
 
-### Task 35: PR pipeline
+### Task 36: PR pipeline
 
 **Files:**
 - Create: `.github/workflows/pr.yml`
@@ -4911,7 +5096,10 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Build image
-        run: docker build -t testscope-${{ matrix.image }}:${{ github.sha }} ${{ matrix.service }}
+        # Repo-root build context (`.`) + explicit `-f` so backend/api and backend/worker's
+        # Dockerfiles can `COPY backend/shared` — the default per-service context can't
+        # reach a sibling directory (see Task 17's Dockerfile header comment).
+        run: docker build -t testscope-${{ matrix.image }}:${{ github.sha }} -f ${{ matrix.service }}/Dockerfile .
       - name: Scan with Trivy
         uses: aquasecurity/trivy-action@0.24.0
         with:
@@ -4939,13 +5127,13 @@ git add .github/workflows/pr.yml
 git commit -m "ci: add PR pipeline (lint, unit+MCP integration tests, coverage, image build+scan)"
 ```
 
-### Task 36: Dev deploy workflow (self-hosted runner)
+### Task 37: Dev deploy workflow (self-hosted runner)
 
 **Files:**
 - Create: `.github/workflows/deploy-dev.yml`
 - Create: `kubernetes/dev/smoke-test.sh`
 
-**Interfaces:** consumes the same four `service`/`image` pairs as Task 35's build matrix; consumes `kubernetes/dev` overlay from Task 34.
+**Interfaces:** consumes the same four `service`/`image` pairs as Task 36's build matrix; consumes `kubernetes/dev` overlay from Task 35.
 
 - [ ] **Step 1: Write the smoke test script**
 
@@ -4994,7 +5182,7 @@ jobs:
       - uses: docker/login-action@v3
         with: { registry: ghcr.io, username: "${{ github.actor }}", password: "${{ secrets.GITHUB_TOKEN }}" }
       - run: |
-          docker build -t ghcr.io/${{ github.repository_owner }}/testscope-${{ matrix.image }}:${{ github.sha }} ${{ matrix.service }}
+          docker build -t ghcr.io/${{ github.repository_owner }}/testscope-${{ matrix.image }}:${{ github.sha }} -f ${{ matrix.service }}/Dockerfile .
           docker push ghcr.io/${{ github.repository_owner }}/testscope-${{ matrix.image }}:${{ github.sha }}
 
   deploy:
@@ -5025,13 +5213,13 @@ git add .github/workflows/deploy-dev.yml kubernetes/dev/smoke-test.sh
 git commit -m "ci: add dev deploy workflow (self-hosted runner, GHCR push, kustomize apply, smoke test)"
 ```
 
-### Task 37: Prod deploy workflow (manual approval gate)
+### Task 38: Prod deploy workflow (manual approval gate)
 
 **Files:**
 - Create: `.github/workflows/deploy-prod.yml`
 - Create: `kubernetes/prod/smoke-test.sh` (copy of `kubernetes/dev/smoke-test.sh` with `NAMESPACE`/`HOST` defaults changed to `prod`/`testscope.local`)
 
-**Interfaces:** consumes the same build matrix pattern as Task 36; requires a GitHub **Environment** named `production` to be configured with a required reviewer (a one-time manual repo-settings step, documented here rather than automatable via workflow YAML).
+**Interfaces:** consumes the same build matrix pattern as Task 37; requires a GitHub **Environment** named `production` to be configured with a required reviewer (a one-time manual repo-settings step, documented here rather than automatable via workflow YAML).
 
 - [ ] **Step 1: Write the workflow, gated on a version tag and the `production` Environment**
 
@@ -5061,7 +5249,7 @@ jobs:
       - uses: docker/login-action@v3
         with: { registry: ghcr.io, username: "${{ github.actor }}", password: "${{ secrets.GITHUB_TOKEN }}" }
       - run: |
-          docker build -t ghcr.io/${{ github.repository_owner }}/testscope-${{ matrix.image }}:${{ github.ref_name }} ${{ matrix.service }}
+          docker build -t ghcr.io/${{ github.repository_owner }}/testscope-${{ matrix.image }}:${{ github.ref_name }} -f ${{ matrix.service }}/Dockerfile .
           docker push ghcr.io/${{ github.repository_owner }}/testscope-${{ matrix.image }}:${{ github.ref_name }}
 
   deploy:
@@ -5108,17 +5296,17 @@ git commit -m "ci: add prod deploy workflow (tag-triggered, manual approval gate
 
 ## Phase 9 — Observability
 
-### Task 38: Instrument `api`/`worker`/both MCP servers with `prometheus_client`; deploy Prometheus + Grafana + Loki/Promtail
+### Task 39: Instrument `api`/`worker`/both MCP servers with `prometheus_client`
 
 **Files:**
 - Modify: `backend/api/app/main.py` (add `/metrics`)
-- Modify: `backend/worker/app/main.py`, `app/runner.py` (add `/metrics` on the health server, record histogram/counters)
+- Modify: `backend/worker/app/main.py`, `app/runner.py`, `app/mcp_clients.py`, `app/nodes/report_saver.py` (add `/metrics` on the health server, record histogram/counters)
 - Modify: `mcp-server/server.py` (add `/metrics` on the health server from Task 32)
-- Create: `kubernetes/monitoring/prometheus.yaml`, `grafana.yaml`, `loki.yaml`, `promtail.yaml`
+- Create: `backend/shared/metrics.py`
 - Test: `backend/api/tests/test_metrics.py`, `backend/worker/tests/test_metrics.py`
 
 **Interfaces:**
-- Produces: `backend/shared/metrics.py` — `REQUEST_COUNT = Counter(...)`, `REQUEST_LATENCY = Histogram(...)` (api); `ANALYSIS_COUNT = Counter("testscope_analyses_total", ["status"])`, `ANALYSIS_DURATION = Histogram("testscope_analysis_duration_seconds")`, `LLM_CALL_COUNT = Counter("testscope_llm_calls_total", ["status"])`, `MCP_TOOL_CALL_COUNT = Counter("testscope_mcp_tool_calls_total", ["tool", "status"])`, `MCP_TOOL_LATENCY = Histogram("testscope_mcp_tool_duration_seconds", ["tool"])` (worker) — all `prometheus_client` primitives, importable from `backend/shared` since both `api` and `worker` expose `/metrics`.
+- Produces: `backend/shared/metrics.py` — `REQUEST_COUNT = Counter(...)`, `REQUEST_LATENCY = Histogram(...)` (api); `ANALYSIS_COUNT = Counter("testscope_analyses_total", ["status"])`, `ANALYSIS_DURATION = Histogram("testscope_analysis_duration_seconds")`, `LLM_CALL_COUNT = Counter("testscope_llm_calls_total", ["status"])`, `MCP_TOOL_CALL_COUNT = Counter("testscope_mcp_tool_calls_total", ["tool", "status"])`, `MCP_TOOL_LATENCY = Histogram("testscope_mcp_tool_duration_seconds", ["tool"])` (worker) — all `prometheus_client` primitives, importable from `backend/shared` since both `api` and `worker` expose `/metrics`. Consumed by Task 40's Prometheus scrape config (which matches on the `app` pod label, not on these metric names directly, but the dashboard built in Task 41 references these names exactly).
 
 - [ ] **Step 1: Write failing test asserting `/metrics` is exposed and increments on a request**
 
@@ -5222,7 +5410,55 @@ Add `/metrics` to `backend/worker/app/health.py`'s FastAPI app (same `make_asgi_
 Run: `cd backend/api && python -m pytest tests/test_metrics.py -v` and the equivalent worker test
 Expected: PASS
 
-- [ ] **Step 5: Deploy Prometheus, Grafana, Loki, Promtail to the `monitoring` namespace**
+- [ ] **Step 5: Commit**
+
+```bash
+git add backend/shared/metrics.py backend/api/app/main.py backend/api/tests/test_metrics.py backend/worker/app mcp-server/server.py
+git commit -m "feat(observability): instrument api/worker/mcp servers with prometheus_client"
+```
+
+### Task 40: Deploy Prometheus (with RBAC) + Grafana (with datasource/dashboard provisioning) + Loki + Promtail; verify scraping and datasources actually work
+
+**Files:**
+- Create: `kubernetes/monitoring/rbac.yaml`, `prometheus.yaml`, `grafana.yaml`, `grafana-datasources.yaml`, `grafana-dashboard-provider.yaml`, `loki.yaml`, `promtail.yaml`
+
+**Interfaces:**
+- Consumes: the `app` pod label already set on every Deployment since Task 32/33/34 (`api`, `worker`, `mcp-test-analysis`, `mcp-github`) — Prometheus's `kubernetes_sd_configs` relabeling keys off it.
+- Produces: a `prometheus` `ServiceAccount`/`ClusterRole`/`ClusterRoleBinding` granting the pod-discovery permissions `kubernetes_sd_configs` actually needs — without this, Prometheus's service-account token has no RBAC grant and the K8s API returns 403 on every discovery request, silently yielding zero scrape targets (this is *not* covered by "Validate manifests parse" in the original version of this task, since a `kubectl apply --dry-run=client` never talks to a running API server or evaluates RBAC — this task's Step 3 verification is what actually catches it).
+- Produces: a `grafana-datasources` ConfigMap and `grafana-dashboard-provider` ConfigMap, both mounted into Grafana's `/etc/grafana/provisioning/` — Grafana auto-loads both on startup, no manual "Add data source" clicking through its UI. Task 41's dashboard ConfigMap is also mounted directly into Grafana (as `/etc/grafana/dashboards/testscope.json`), replacing the sidecar-label convention (`grafana_dashboard: "1"`) the original version of this task assumed but never actually ran a sidecar container for.
+
+- [ ] **Step 1: Write RBAC for Prometheus's pod discovery**
+
+```yaml
+# kubernetes/monitoring/rbac.yaml
+apiVersion: v1
+kind: ServiceAccount
+metadata: { name: prometheus, namespace: monitoring }
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata: { name: prometheus }
+rules:
+  - apiGroups: [""]
+    resources: ["nodes", "nodes/metrics", "services", "endpoints", "pods"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["networking.k8s.io"]
+    resources: ["ingresses"]
+    verbs: ["get", "list", "watch"]
+  - nonResourceURLs: ["/metrics"]
+    verbs: ["get"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata: { name: prometheus }
+roleRef: { apiGroup: rbac.authorization.k8s.io, kind: ClusterRole, name: prometheus }
+subjects:
+  - kind: ServiceAccount
+    name: prometheus
+    namespace: monitoring
+```
+
+- [ ] **Step 2: Write Prometheus (using that ServiceAccount), Grafana (with datasource + dashboard provisioning mounted in), Loki, and Promtail**
 
 ```yaml
 # kubernetes/monitoring/prometheus.yaml (minimal single-replica, sufficient for a course-project demo)
@@ -5235,6 +5471,7 @@ spec:
   template:
     metadata: { labels: { app: prometheus } }
     spec:
+      serviceAccountName: prometheus
       containers:
         - name: prometheus
           image: prom/prometheus:v2.55.0
@@ -5267,6 +5504,42 @@ spec:
 ```
 
 ```yaml
+# kubernetes/monitoring/grafana-datasources.yaml
+apiVersion: v1
+kind: ConfigMap
+metadata: { name: grafana-datasources, namespace: monitoring }
+data:
+  datasources.yaml: |
+    apiVersion: 1
+    datasources:
+      - name: Prometheus
+        type: prometheus
+        access: proxy
+        url: http://prometheus:9090
+        isDefault: true
+      - name: Loki
+        type: loki
+        access: proxy
+        url: http://loki:3100
+```
+
+```yaml
+# kubernetes/monitoring/grafana-dashboard-provider.yaml
+apiVersion: v1
+kind: ConfigMap
+metadata: { name: grafana-dashboard-provider, namespace: monitoring }
+data:
+  dashboards.yaml: |
+    apiVersion: 1
+    providers:
+      - name: testscope
+        folder: ""
+        type: file
+        options:
+          path: /etc/grafana/dashboards
+```
+
+```yaml
 # kubernetes/monitoring/grafana.yaml
 apiVersion: apps/v1
 kind: Deployment
@@ -5281,6 +5554,19 @@ spec:
         - name: grafana
           image: grafana/grafana:11.2.0
           ports: [{ containerPort: 3000 }]
+          volumeMounts:
+            - { name: datasources, mountPath: /etc/grafana/provisioning/datasources }
+            - { name: dashboard-provider, mountPath: /etc/grafana/provisioning/dashboards }
+            - { name: dashboards, mountPath: /etc/grafana/dashboards }
+      volumes:
+        - name: datasources
+          configMap: { name: grafana-datasources }
+        - name: dashboard-provider
+          configMap: { name: grafana-dashboard-provider }
+        - name: dashboards
+          configMap: { name: testscope-dashboard }  # created by Task 41 — this Deployment's pod
+                                                     # won't reach Running until that ConfigMap
+                                                     # exists, which is fine: Task 41 runs next
 ---
 apiVersion: v1
 kind: Service
@@ -5331,24 +5617,39 @@ spec:
           hostPath: { path: /var/log/pods }
 ```
 
-- [ ] **Step 6: Validate manifests parse**
+- [ ] **Step 3: Apply to a real namespace and verify Prometheus actually has scrape targets and Grafana actually has the datasources loaded**
 
-Run: `kubectl apply --dry-run=client -f kubernetes/monitoring/`
-Expected: all resources listed, no errors
+`kubectl apply --dry-run=client` (used everywhere else in this plan for K8s manifests) only proves the YAML parses — it never talks to a live API server, so it cannot catch a missing RBAC grant or a bad provisioning mount. This step deliberately applies for real, against `dev` (which by this point in the plan already has `api`/`worker`/`mcp-test-analysis`/`mcp-github` deployed from Tasks 32–35).
 
-- [ ] **Step 7: Commit**
+Run:
+```bash
+kubectl apply -f kubernetes/monitoring/
+kubectl -n monitoring wait --for=condition=available --timeout=120s deployment/prometheus deployment/grafana deployment/loki
+kubectl -n monitoring port-forward svc/prometheus 9090:9090 &
+sleep 3
+curl -s http://localhost:9090/api/v1/targets | python3 -c "import sys, json; d = json.load(sys.stdin); print([t['health'] for t in d['data']['activeTargets']])"
+kubectl -n monitoring port-forward svc/grafana 3000:3000 &
+sleep 3
+curl -s -u admin:admin http://localhost:3000/api/datasources | python3 -c "import sys, json; print([d['name'] for d in json.load(sys.stdin)])"
+```
+Expected: the targets query prints at least one `"up"` (confirms RBAC is correct and Prometheus can reach the `dev` namespace's pods); the datasources query prints `['Prometheus', 'Loki']` (confirms the provisioning ConfigMaps mounted and loaded, no manual "Add data source" click needed).
+
+**If the targets list is empty:** re-check `kubectl -n monitoring logs deployment/prometheus` for `403 Forbidden` — that means the `ClusterRoleBinding` in Step 1 didn't apply cleanly, or the `serviceAccountName: prometheus` line is missing from the Deployment.
+**If the datasources list is empty:** `kubectl -n monitoring exec deployment/grafana -- cat /etc/grafana/provisioning/datasources/datasources.yaml` to confirm the ConfigMap actually mounted; Grafana only reads provisioning files at container startup, so a ConfigMap created *after* the pod started needs a pod restart (`kubectl -n monitoring rollout restart deployment/grafana`) to be picked up.
+
+- [ ] **Step 4: Commit**
 
 ```bash
-git add backend/shared/metrics.py backend/api/app/main.py backend/api/tests/test_metrics.py backend/worker/app kubernetes/monitoring
-git commit -m "feat(observability): instrument api/worker/mcp servers with prometheus_client; deploy Prometheus/Grafana/Loki/Promtail"
+git add kubernetes/monitoring/rbac.yaml kubernetes/monitoring/prometheus.yaml kubernetes/monitoring/grafana.yaml kubernetes/monitoring/grafana-datasources.yaml kubernetes/monitoring/grafana-dashboard-provider.yaml kubernetes/monitoring/loki.yaml kubernetes/monitoring/promtail.yaml
+git commit -m "feat(observability): deploy Prometheus (with RBAC)/Grafana (with datasource+dashboard provisioning)/Loki/Promtail; verify scraping and datasources"
 ```
 
-### Task 39: Grafana dashboard
+### Task 41: Grafana dashboard
 
 **Files:**
 - Create: `kubernetes/monitoring/dashboard-configmap.yaml`
 
-**Interfaces:** references the exact metric names from Task 38 (`testscope_api_requests_total`, `testscope_analyses_total`, `testscope_analysis_duration_seconds`, `testscope_mcp_tool_duration_seconds`, `testscope_mcp_tool_calls_total`).
+**Interfaces:** references the exact metric names from Task 39 (`testscope_api_requests_total`, `testscope_analyses_total`, `testscope_analysis_duration_seconds`, `testscope_mcp_tool_duration_seconds`, `testscope_mcp_tool_calls_total`), and mounts directly into the Grafana Deployment set up in Task 40 (no sidecar, no `grafana_dashboard` label — see that task's note on why).
 
 - [ ] **Step 1: Write the dashboard JSON, provisioned via a ConfigMap Grafana auto-loads**
 
@@ -5359,7 +5660,10 @@ kind: ConfigMap
 metadata:
   name: testscope-dashboard
   namespace: monitoring
-  labels: { grafana_dashboard: "1" }
+  # No `grafana_dashboard: "1"` label: that's the kube-prometheus-stack sidecar-discovery
+  # convention, and Task 40's Grafana Deployment doesn't run that sidecar. This ConfigMap
+  # is mounted directly at /etc/grafana/dashboards/testscope.json instead (Task 40's
+  # grafana-dashboard-provider ConfigMap tells Grafana to load JSON files from there).
 data:
   testscope.json: |
     {
@@ -5384,29 +5688,39 @@ data:
 Run: `python -c "import yaml, json; doc = yaml.safe_load(open('kubernetes/monitoring/dashboard-configmap.yaml')); json.loads(doc['data']['testscope.json'])"`
 Expected: no output (parses cleanly)
 
-- [ ] **Step 3: Commit**
+- [ ] **Step 3: Apply and confirm the dashboard actually renders in Grafana**
+
+Run:
+```bash
+kubectl apply -f kubernetes/monitoring/dashboard-configmap.yaml
+kubectl -n monitoring rollout restart deployment/grafana  # picks up the ConfigMap if grafana was already Running (Task 40)
+kubectl -n monitoring rollout status deployment/grafana
+```
+Then open `http://<control_plane_public_ip>:3000` (port-forward or the demo's ingress), log in (default `admin`/`admin` unless changed), and confirm "TestScope AI — System Health" appears under Dashboards without any manual import — Task 40's `grafana-dashboard-provider` ConfigMap is what makes this automatic.
+
+- [ ] **Step 4: Commit**
 
 ```bash
 git add kubernetes/monitoring/dashboard-configmap.yaml
 git commit -m "feat(observability): add TestScope AI System Health Grafana dashboard"
 ```
 
-### Task 40: Verify CloudWatch alarms end-to-end
+### Task 42: Verify CloudWatch alarms end-to-end
 
-**Files:** none created — this task verifies Task 29's Terraform `monitoring` module actually alarms, using a manual trigger.
+**Files:** none created — this task verifies Task 30's Terraform `monitoring` module actually alarms, using a manual trigger.
 
-**Interfaces:** consumes `aws_cloudwatch_metric_alarm.dlq_not_empty` and `.queue_backlog_age` from Task 29.
+**Interfaces:** consumes `aws_cloudwatch_metric_alarm.dlq_not_empty` and `.queue_backlog_age` from Task 30.
 
-- [ ] **Step 1: After `terraform apply` (Task 30) has run for `dev`, manually push a message directly to the DLQ to confirm the alarm fires**
+- [ ] **Step 1: After `terraform apply` (Task 31) has run for `dev`, manually push a message directly to the DLQ to confirm the alarm fires**
 
 Run: `aws sqs send-message --queue-url "$(terraform -chdir=terraform/environments/dev output -raw dlq_url 2>/dev/null || echo MISSING)" --message-body '{"test":"alarm-check"}'`
 
-(If `dlq_url` isn't yet exported from `environments/dev`'s outputs, add `output "dlq_url" { value = module.sqs.dlq_arn }` to `terraform/environments/dev/main.tf` first, matching the pattern from Task 29's other outputs.)
+(If `dlq_url` isn't yet exported from `environments/dev`'s outputs, add `output "dlq_url" { value = module.sqs.dlq_arn }` to `terraform/environments/dev/main.tf` first, matching the pattern from Task 30's other outputs.)
 
 - [ ] **Step 2: Confirm the alarm transitions to `ALARM` and the SNS email arrives**
 
 Run: `aws cloudwatch describe-alarms --alarm-names testscope-dev-dlq-not-empty --query 'MetricAlarms[0].StateValue'`
-Expected: `"ALARM"` within ~5 minutes; confirm the subscribed email (`var.alert_email` from Task 29) received the SNS notification
+Expected: `"ALARM"` within ~5 minutes; confirm the subscribed email (`var.alert_email` from Task 30) received the SNS notification
 
 - [ ] **Step 3: Clean up the test message and confirm the alarm clears**
 
@@ -5424,7 +5738,7 @@ git commit -m "feat(terraform): export dlq_url output for alarm verification"
 
 ## Phase 10 — Local Full-Stack Integration
 
-### Task 41: `docker-compose.yml` full local stack + local E2E smoke test
+### Task 43: `docker-compose.yml` full local stack + local E2E smoke test
 
 **Files:**
 - Modify: `docker-compose.yml` (replace Task 1's empty stub)
@@ -5457,7 +5771,7 @@ services:
     environment: [AWS_ACCESS_KEY_ID=test, AWS_SECRET_ACCESS_KEY=test, AWS_DEFAULT_REGION=us-east-1]
 
   mcp-test-analysis:
-    build: ./mcp-server
+    build: { context: ., dockerfile: mcp-server/Dockerfile }
     environment:
       - WORKSPACE_ROOT=/workspace
       - DYNAMODB_TABLE=testscope-analyses-local
@@ -5508,7 +5822,7 @@ services:
     ports: ["8000:8000"]
 
   frontend:
-    build: ./frontend
+    build: { context: ., dockerfile: frontend/Dockerfile }
     ports: ["3000:80"]
     depends_on: [api]
 ```
@@ -5568,11 +5882,78 @@ git commit -m "feat(local): add full-stack docker-compose (LocalStack + all serv
 
 ---
 
+## Phase 11 — Documentation
+
+### Task 44: Write `docs/test-plan.md`
+
+**Files:**
+- Create: `docs/test-plan.md`
+
+**Interfaces:** none code-level — this is the assignment's separate "test plan document" deliverable (per `reference/assignment-instructions.md`'s Testing section: "Provide a clear test plan document (what you test, how, and your success criteria)"), distinct from design.md §14 (which describes the *strategy* at design time, before any test existed) and distinct from `docs/2026-07-30-testscope-ai-plan.md` itself (which describes *how to build* each test as part of TDD, not what the finished suite covers). This task writes it last, after Tasks 1–43, specifically so it can describe the test suite that actually exists rather than the one that was planned — every row below cites the task that built it, so it stays checkable against the real repo.
+
+- [ ] **Step 1: Write the document**
+
+```markdown
+# TestScope AI — Test Plan
+
+## Philosophy
+
+Every layer mocks the layer below it except one: MCP tool calls, which are always tested
+against the real MCP transport (streamable-HTTP) rather than mocked, per the assignment's
+explicit integration-test requirement. The LLM is never called for real outside Task 43's
+one deliberate manual smoke test — every automated test (unit, MCP integration, worker E2E,
+API, frontend) uses a stub LLM client returning canned structured output.
+
+## Test Layers
+
+| Layer | What's tested | How | Built in |
+|---|---|---|---|
+| Unit — MCP tools | `extract_test_metadata` (`ast` parsing), `find_test_files`, `read_test_file`, `cleanup_workspace`, `save_coverage_report`, `get_previous_analysis` — valid/invalid input, empty results, oversized files/repos, storage failure, access-denied | Zero mocking for `extract_test_metadata` (pure `ast`, deterministic); `moto` for S3/DynamoDB; a local bare git repo fixture (no network) for clone-dependent tools | Tasks 2–7 |
+| Integration — MCP transport | The full `mcp-test-analysis` server over real streamable-HTTP, not function calls | Spins up `server.py` as a subprocess, connects a real `ClientSession`, calls tools by name exactly as `worker`/`api` would | Task 8 |
+| Unit — `backend/shared` | `AnalysisRecord` round-trip, `AnalysisStore`/`ReportStore`/`JobQueue` CRUD, idempotent upsert, GSI queries | `moto` for DynamoDB/S3/SQS — never real AWS | Task 9 |
+| Unit — retry/classification | `with_retry`'s backoff/exhaustion behavior; `mcp_clients._is_retryable_tool_error`'s terminal-vs-transient classification | Fake flaky/always-failing async functions, no network | Task 11 |
+| Unit — worker LangGraph nodes | All 11 nodes (Request Validator through Report Saver) individually: happy path, each documented failure-handling behavior from design.md §4/§13 (graceful termination, non-fatal warnings, fabricated-evidence stripping) | `call_llm`/`call_github_tool`/`call_test_mcp_tool` mocked per-node via `unittest.mock.patch`; stub Pydantic model instances stand in for LLM output | Tasks 10–17 |
+| Integration/E2E — worker | Full `run_analysis(...)` pipeline reaching `status=completed`, including a real `mcp-test-analysis` subprocess | Stub LLM (`app.llm_client.call_llm` patched at the module level), stub GitHub tool responses, real MCP transport, `moto`-mocked AWS | Task 17 |
+| Unit — `backend/api` | Every route: validation, 404/409 status codes, presigned URL generation, GitHub-issue gating on `status=completed` | `TestClient` + `moto` | Tasks 18–22 |
+| Unit — observability | `/metrics` exposes and increments expected counters | `TestClient`, no external Prometheus needed | Task 39 |
+| Unit — frontend | API client (`fetch` calls), Home/Results/History page behavior (form submission, polling, rendering, confirm-before-create-issue) | Vitest + Testing Library, `fetch` stubbed | Tasks 23–26 |
+| Infrastructure verification (not unit tests — live checks against real infra) | Terraform `validate`/`plan` on every module; post-`apply` `kubectl get nodes` cluster-convergence check; live Prometheus-targets and Grafana-datasources check; CloudWatch alarm fire/clear cycle | Real `terraform`, real `kubectl`/`ssh`, real `aws` CLI against the actually-provisioned `dev` environment | Tasks 27–31 (Terraform), 40 (Prometheus/Grafana), 42 (CloudWatch) |
+| Local full-stack E2E | One real request through every service (`frontend`→`api`→SQS→`worker`→MCP servers→DynamoDB/S3), plus exactly one real Claude API call as final hand-verification | `docker-compose` with LocalStack standing in for AWS; the one real LLM call is manual, not part of any CI job | Task 43 |
+
+## Success Criteria
+
+- ≥80% line coverage on `mcp-server/`, `backend/shared/`, `backend/worker/app/`, `backend/api/app/` (enforced by `--cov-fail-under=80` in Task 36's PR pipeline; a failing threshold blocks merge).
+- All PR-pipeline checks green pre-merge: lint, unit tests, MCP integration test, image builds, Trivy scan (Task 36).
+- MCP integration suite (Task 8) passes against real transport, not mocks — this is the assignment's specific integration-test requirement and is never skipped or weakened to a mock in CI.
+- Post-deploy smoke test (`kubernetes/dev/smoke-test.sh` / `kubernetes/prod/smoke-test.sh`, Tasks 37/38) passes in both `dev` and `prod` after every deploy.
+- Task 40's live Prometheus-targets/Grafana-datasources check passes at least once before the presentation (this is what the live "show your observability dashboard" demo depends on).
+- Task 43's local full-stack smoke test passes, including the one deliberate real Claude API call, as the final proof the live LLM integration works end-to-end.
+
+## Out of Scope
+
+Load/performance testing, chaos/fault-injection testing beyond the specific failure-handling
+paths in design.md §13, and browser/cross-device compatibility testing beyond what Vitest +
+Testing Library's jsdom environment exercises — all stated v1 limitations, not gaps.
+```
+
+- [ ] **Step 2: Verify it actually satisfies the assignment's requirement, not just design.md's**
+
+Re-read `reference/assignment-instructions.md`'s Testing section against the document above: it must name unit tests, name integration tests (real MCP transport specifically), and state success criteria — confirm all three are present as distinct, findable sections (they are: "Test Layers" table's rows are individually labeled Unit/Integration/E2E, and "Success Criteria" is its own heading).
+
+- [ ] **Step 3: Commit**
+
+```bash
+git add docs/test-plan.md
+git commit -m "docs: add standalone test-plan.md (assignment deliverable), traceable to the tasks that built each layer"
+```
+
+---
+
 ## Plan Self-Review
 
-**Spec coverage:** every numbered section of `docs/2026-07-30-testscope-ai-design.md` maps to at least one task — §3 architecture (Tasks 1, 8, 17, 41), §4 workflow (Tasks 10–17), §5 MCP tooling (Tasks 2–8, 11, 22), §6 data model (Task 9), §7 API (Tasks 18–22), §8 UI (Tasks 23–26), §9 Terraform/AWS (Tasks 27–30, 40), §10 K8s (Tasks 31–34), §11 CI/CD (Tasks 35–37), §12 observability (Tasks 38–40), §13 error handling (covered inline across Tasks 10–17's failure-handling steps), §14 testing strategy (every task's TDD steps + Task 8/17's MCP-transport and stub-LLM E2E tests + Task 41's local full E2E). No spec section lacks a task.
+**Spec coverage:** every numbered section of `docs/2026-07-30-testscope-ai-design.md` maps to at least one task — §3 architecture (Tasks 1, 8, 17, 43), §4 workflow (Tasks 10–17), §5 MCP tooling (Tasks 2–8, 11, 22), §6 data model (Task 9), §7 API (Tasks 18–22), §8 UI (Tasks 23–26), §9 Terraform/AWS (Tasks 27–31, 42), §10 K8s (Tasks 32–35), §11 CI/CD (Tasks 36–38), §12 observability (Tasks 39–42), §13 error handling (covered inline across Tasks 10–17's failure-handling steps), §14 testing strategy (every task's TDD steps + Task 8/17's MCP-transport and stub-LLM E2E tests + Task 43's local full E2E). No spec section lacks a task. The assignment's separate "test plan document" deliverable (distinct from design.md §14, which is a design-time section, not a standalone file) is produced by Task 44.
 
-**Placeholder scan:** no "TBD"/"TODO"/"handle appropriately" language appears; every step shows real code, real commands, and real expected output. The two places that look like placeholders (`REPLACED_BY_OVERLAY` in `kubernetes/base/configmap.yaml`/`ingress.yaml`, `PASTE_FROM_TERRAFORM_OUTPUT_queue_url` in the overlays) are intentional and documented — they're the literal manual hand-off point between `terraform apply` output and `kubectl apply` input described in Task 30, not unfinished plan content.
+**Placeholder scan:** no "TBD"/"TODO"/"handle appropriately" language appears; every step shows real code, real commands, and real expected output. The two places that look like placeholders (`REPLACED_BY_OVERLAY` in `kubernetes/base/configmap.yaml`/`ingress.yaml`, `PASTE_FROM_TERRAFORM_OUTPUT_queue_url` in the overlays) are intentional and documented — they're the literal manual hand-off point between `terraform apply` output and `kubectl apply` input described in Task 31, not unfinished plan content.
 
 **Type consistency:** `AgentState`'s fields (Task 10) are used identically by every node task through Task 17. `AnalysisRecord`'s fields (Task 9) match the DynamoDB item shape written by `mcp-server`'s `save_coverage_report` (Task 6) and read by `backend/api`'s routes (Tasks 19–22) and `backend/worker`'s `job_intake`/`runner` (Tasks 10, 17). MCP tool names (`find_test_files`, `read_test_file`, `extract_test_metadata`, `save_coverage_report`, `get_previous_analysis`, `cleanup_workspace`) are identical between `mcp-server/server.py`'s `@mcp.tool()` registrations (Task 8) and every call site (Tasks 11, 13, 14, 17). `call_github_tool`/`call_test_mcp_tool` signatures match between their Task 11 definition and every consumer.
 
