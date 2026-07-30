@@ -62,7 +62,7 @@ Each phase's tasks are ordered so every task lands with its own passing tests be
 - Create: `backend/api/app/__init__.py`, `backend/worker/app/__init__.py`, `backend/shared/__init__.py`, `mcp-server/__init__.py`
 - Create: `frontend/package.json`, `frontend/tsconfig.json`, `frontend/vite.config.ts`
 - Create: `docker-compose.yml` (stub, services added incrementally in later phases)
-- Create: `.gitignore`, `README.md`
+- Create: `.gitignore`, `.dockerignore`, `README.md`
 - Create: `backend/api/tests/test_smoke.py`, `backend/worker/tests/test_smoke.py`, `backend/shared/tests/test_smoke.py`, `mcp-server/tests/test_smoke.py`, `frontend/src/smoke.test.ts`
 
 **Interfaces:**
@@ -140,17 +140,37 @@ describe("smoke", () => { it("runs", () => { expect(1 + 1).toBe(2); }); });
 Run: `cd frontend && npm install && npm test`
 Expected: PASS
 
-- [ ] **Step 6: Write root `.gitignore` and stub `docker-compose.yml`**
+- [ ] **Step 6: Write root `.gitignore`, root `.dockerignore`, and stub `docker-compose.yml`**
 
 ```yaml
 # docker-compose.yml — services added in Phase 10; placeholder keeps `docker compose config` valid now
 services: {}
 ```
 
+```
+# .dockerignore — root-level, since every Dockerfile (Tasks 8, 17, 22, 26) builds with
+# repo-root context (`docker build -f <service>/Dockerfile .`, see Task 17's Dockerfile
+# header comment). Without this, every image build sends the whole working tree —
+# including .git history and any local /workspace clone scratch dirs — to the Docker
+# daemon as build context, which is slow and can leak local clutter into layers.
+.git/
+**/node_modules/
+**/__pycache__/
+**/*.pyc
+**/.pytest_cache/
+**/venv/
+**/.venv/
+**/dist/
+**/build/
+/workspace/
+*.pem
+.env
+```
+
 - [ ] **Step 7: Commit**
 
 ```bash
-git add backend frontend mcp-server docker-compose.yml .gitignore README.md
+git add backend frontend mcp-server docker-compose.yml .gitignore .dockerignore README.md
 git commit -m "chore: scaffold monorepo packages for api, worker, shared, mcp-server, frontend"
 ```
 
@@ -927,8 +947,72 @@ git commit -m "feat(mcp-server): add get_previous_analysis tool"
 **Interfaces:**
 - Consumes: all six tool functions from Tasks 2–7; `WorkspaceManager`/`start_sweeper` from Tasks 3/5.
 - Produces: `server.py` exposes an MCP server over streamable-HTTP (env `MCP_HOST`, `MCP_PORT`, default `0.0.0.0:8100`) registering `find_test_files`, `read_test_file`, `extract_test_metadata`, `save_coverage_report`, `get_previous_analysis`, `cleanup_workspace` as `@mcp.tool()`-decorated tools with MCP-visible names matching spec §5.1 exactly — this is the contract the worker's MCP client (Task 11) calls by name.
+- Produces: `scripts/verify-github-mcp-tools.py` — a one-time, by-hand verification script (Step 1) confirming the *actual* deployed `github-mcp-server`'s tool names and response field names, run and confirmed **before** Task 11 is written. Task 11's `request_validator`/`requirement_retriever` and Task 22's `create_github_issue` all assume specific tool names (`get_repository`, `get_issue`, `get_issue_comments`, `create_issue`) and specific response fields (`default_branch`, `size`, `body`, `comments`, `html_url`) that spec §5.2 states but nothing has actually confirmed against a live server yet — this step is the confirmation, not the docstring comment the original version of this task shipped with (which was easy to skip and never blocked anything).
 
-- [ ] **Step 1: Implement `github_client.py`'s real `get_repo_size_bytes`**
+- [ ] **Step 1: Verify the deployed `github-mcp-server`'s real tool names and response shapes — REQUIRED, blocks Task 11**
+
+Run the real `mcp-github` image locally against a disposable/read-only-scoped GitHub token (fine-grained PAT, `Contents: read` + `Issues: read` is enough for this check — do **not** use a token with write access, since this script only needs to read, and Step 1c below deliberately doesn't call `create_issue` against a real repo):
+
+```bash
+docker run -d --name mcp-github-verify -p 8101:8100 -e GITHUB_PERSONAL_ACCESS_TOKEN=<your-read-only-PAT> ghcr.io/github/github-mcp-server:latest
+```
+
+```python
+# scripts/verify-github-mcp-tools.py — run once by hand, not part of any automated test
+import asyncio
+import json
+from mcp import ClientSession
+from mcp.client.streamable_http import streamablehttp_client
+
+ASSUMED_TOOLS = {
+    "get_repository": {"owner": "octocat", "repo": "Hello-World"},
+    "get_issue": {"owner": "octocat", "repo": "Hello-World", "issue_number": 1},
+    "get_issue_comments": {"owner": "octocat", "repo": "Hello-World", "issue_number": 1},
+}
+
+async def main():
+    async with streamablehttp_client("http://localhost:8101/mcp") as (read, write, _):
+        async with ClientSession(read, write) as session:
+            await session.initialize()
+
+            listed = await session.list_tools()
+            listed_names = {t.name for t in listed.tools}
+            print("Tools exposed by this server:", sorted(listed_names))
+            for name in [*ASSUMED_TOOLS, "create_issue"]:
+                print(f"  {'FOUND' if name in listed_names else 'MISSING'}: {name}")
+
+            for tool_name, args in ASSUMED_TOOLS.items():
+                result = await session.call_tool(tool_name, args)
+                print(f"\n{tool_name}({args}) ->")
+                print(json.dumps(result.structuredContent, indent=2))
+
+            # create_issue is deliberately NOT called here (it would create a real GitHub
+            # issue) — instead, print its declared input schema so field names (e.g. does
+            # it return `html_url` on success?) can be checked against the official docs
+            # for the installed image version without side effects.
+            create_issue_tool = next(t for t in listed.tools if t.name == "create_issue")
+            print("\ncreate_issue input schema:")
+            print(json.dumps(create_issue_tool.inputSchema, indent=2))
+
+asyncio.run(main())
+```
+
+Run: `python scripts/verify-github-mcp-tools.py`
+
+Expected — confirm, by reading the printed output, every one of these before writing a single line of Task 11:
+- `get_repository`, `get_issue`, `get_issue_comments`, `create_issue` all appear in the `FOUND` list (not `MISSING`).
+- `get_repository`'s output contains a `default_branch` key and a `size` key (in KB — this is what `get_repo_size_bytes` below assumes).
+- `get_issue`'s output contains a `body` key.
+- `get_issue_comments`'s output contains a `comments` key (a list).
+- `create_issue`'s input schema accepts `owner`/`repo`/`title`/`body` and its description or the official `github-mcp-server` docs for the installed version confirms it returns `html_url` on success (Task 22 depends on this field name).
+
+**If any of these don't match:** update the constant/field name here in `github_client.py` *and* flag it in this task's commit message — Tasks 11 and 22 haven't been written yet at this point in the build order, so whoever writes them next reads this task's verified names instead of the spec's assumption. Do not proceed to Task 11 until this step's output has been read and confirmed, or until any mismatches have been recorded here.
+
+```bash
+docker rm -f mcp-github-verify
+```
+
+- [ ] **Step 2: Implement `github_client.py`'s real `get_repo_size_bytes`, using the tool name confirmed in Step 1**
 
 ```python
 # mcp-server/github_client.py
@@ -939,9 +1023,9 @@ from mcp.client.streamable_http import streamablehttp_client
 class GithubClient:
     """Thin MCP client this server uses to call the separately-deployed mcp-github server.
 
-    NOTE: verify `get_repository` is the exact tool name exposed by the installed
-    github-mcp-server version (`mcp list-tools` against MCP_GITHUB_URL) and update
-    the constant below if it differs — spec §5.2 assumes this name.
+    TOOL_NAME confirmed against the real deployed github-mcp-server in this task's Step 1 —
+    not an untested assumption. If the installed image's tool name ever changes, re-run
+    scripts/verify-github-mcp-tools.py and update this constant.
     """
     TOOL_NAME = "get_repository"
 
@@ -957,7 +1041,7 @@ class GithubClient:
                 return size_kb * 1024
 ```
 
-- [ ] **Step 2: Implement `server.py` registering all six tools**
+- [ ] **Step 3: Implement `server.py` registering all six tools**
 
 ```python
 # mcp-server/server.py
@@ -1014,7 +1098,7 @@ if __name__ == "__main__":
     mcp.run(transport="streamable-http")
 ```
 
-- [ ] **Step 3: Write the failing MCP integration test (real transport, local fixture repo, no network)**
+- [ ] **Step 4: Write the failing MCP integration test (real transport, local fixture repo, no network)**
 
 ```python
 # mcp-server/tests/test_mcp_integration.py
@@ -1067,24 +1151,24 @@ async def test_find_and_extract_over_real_mcp_transport(tmp_path, monkeypatch):
         proc.wait(timeout=5)
 ```
 
-- [ ] **Step 4: Run to verify failure, then run for real**
+- [ ] **Step 5: Run to verify failure, then run for real**
 
 Run: `cd mcp-server && python -m pytest tests/test_mcp_integration.py -v`
-Expected: first FAIL (`server.py` doesn't exist yet if run before Step 2) — after Step 2's implementation, expected PASS.
+Expected: first FAIL (`server.py` doesn't exist yet if run before Step 3) — after Step 3's implementation, expected PASS.
 
-- [ ] **Step 5: Run the full `mcp-server` test suite and check coverage**
+- [ ] **Step 6: Run the full `mcp-server` test suite and check coverage**
 
 Run: `cd mcp-server && python -m pytest --cov=. --cov-report=term-missing`
 Expected: all tests PASS, coverage ≥80% on `tools/`, `workspace.py`, `aws.py`
 
-- [ ] **Step 6: Commit**
+- [ ] **Step 7: Commit**
 
 ```bash
-git add mcp-server/github_client.py mcp-server/server.py mcp-server/tests/test_mcp_integration.py
-git commit -m "feat(mcp-server): wire FastMCP server, register all tools, add MCP integration test"
+git add scripts/verify-github-mcp-tools.py mcp-server/github_client.py mcp-server/server.py mcp-server/tests/test_mcp_integration.py
+git commit -m "feat(mcp-server): wire FastMCP server, register all tools, add MCP integration test; verify github-mcp-server's real tool names/fields (Step 1)"
 ```
 
-- [ ] **Step 7: Add `mcp-server/Dockerfile`**
+- [ ] **Step 8: Add `mcp-server/Dockerfile`**
 
 ```dockerfile
 # mcp-server/Dockerfile — built with repo-root build context (see Task 36's build command),
@@ -1100,7 +1184,7 @@ EXPOSE 8100
 CMD ["python", "server.py"]
 ```
 
-- [ ] **Step 8: Commit Dockerfile**
+- [ ] **Step 9: Commit Dockerfile**
 
 ```bash
 git add mcp-server/Dockerfile
@@ -1273,6 +1357,20 @@ def test_query_by_repo_issue_orders_newest_first(store):
                                      status="completed", created_at=ts, updated_at=ts))
     results = store.query_by_repo_issue("acme/widgets", 42)
     assert [r.analysis_id for r in results] == ["a1", "a0"]
+
+def test_list_recent_paginates_across_two_pages_without_skipping_or_repeating(store):
+    # Regression test: an earlier version of this cursor only carried `created_at`, not
+    # `analysis_id` — which DynamoDB's GSI ExclusiveStartKey requires alongside it. That
+    # bug wouldn't raise on its own (the types still matched); it just made page 2 wrong.
+    for i, ts in enumerate([f"2026-01-0{n}T00:00:00Z" for n in range(1, 4)]):
+        store.upsert(AnalysisRecord(analysis_id=f"a{i}", repository="acme/widgets", issue_number=i,
+                                     status="completed", created_at=ts, updated_at=ts))
+    page1, cursor = store.list_recent(limit=2)
+    assert [r.analysis_id for r in page1] == ["a2", "a1"]
+    assert cursor is not None
+    page2, cursor2 = store.list_recent(limit=2, cursor=cursor)
+    assert [r.analysis_id for r in page2] == ["a0"]
+    assert cursor2 is None
 ```
 
 - [ ] **Step 6: Run to verify failure, then implement**
@@ -1309,16 +1407,22 @@ class AnalysisStore:
         return [AnalysisRecord.model_validate(item) for item in response["Items"]]
 
     def list_recent(self, limit: int, cursor: str | None = None) -> tuple[list[AnalysisRecord], str | None]:
+        # A GSI query's ExclusiveStartKey must carry the GSI's own key (gsi2_pk, created_at)
+        # *and* the base table's primary key (analysis_id) — DynamoDB needs all three to
+        # resume correctly, even though the GSI's own key alone looks sufficient. The opaque
+        # cursor therefore has to encode both created_at and analysis_id, not created_at alone.
         kwargs = {
             "IndexName": "recent-index",
             "KeyConditionExpression": Key("gsi2_pk").eq("ANALYSIS"),
             "ScanIndexForward": False, "Limit": limit,
         }
         if cursor:
-            kwargs["ExclusiveStartKey"] = {"gsi2_pk": "ANALYSIS", "created_at": cursor, "analysis_id": cursor}
+            created_at, analysis_id = cursor.split("|", 1)
+            kwargs["ExclusiveStartKey"] = {"gsi2_pk": "ANALYSIS", "created_at": created_at, "analysis_id": analysis_id}
         response = self._table.query(**kwargs)
         records = [AnalysisRecord.model_validate(item) for item in response["Items"]]
-        next_cursor = response.get("LastEvaluatedKey", {}).get("created_at")
+        last_key = response.get("LastEvaluatedKey")
+        next_cursor = f"{last_key['created_at']}|{last_key['analysis_id']}" if last_key else None
         return records, next_cursor
 ```
 
@@ -4116,6 +4220,8 @@ runcmd:
 
 **Why the `hostNetwork` patch (fixes a real gap, not a stylistic choice):** the baremetal `ingress-nginx` manifest creates a `NodePort` Service by default — reachable only on a random high port (30000–32767), not 80/443. k3s's bundled Traefik avoided this because k3s ships its own `ServiceLB` component that auto-binds host ports for `LoadBalancer`-type Services; vanilla kubeadm has no equivalent. Patching the controller to `hostNetwork: true` makes it bind directly to ports 80/443 on whichever node it lands on. Since the control-plane keeps its default `NoSchedule` taint (§10), the ingress-nginx pod — like every other pod — schedules onto the worker node, whose public IP is exactly what the security group opens 80/443 for and what `dev.testscope.local`/`testscope.local` are expected to resolve to.
 
+**This makes the worker node — not just the control-plane — a SPOF, and DNS has to point at the right one:** `hostNetwork: true` binds ingress-nginx to *the node it happens to be scheduled on*, which is the worker (the only schedulable node). So `dev.testscope.local`/`testscope.local` must resolve to `worker_public_ip`, not `control_plane_public_ip` — the two are different IPs, and pointing DNS at the control-plane (easy mistake, since that's the first output most apply-order docs mention) means nothing answers on 80/443 at all, since the control-plane never runs ingress-nginx or any application pod. Task 31's `terraform/README.md` calls this out explicitly. It also means the worker going down takes out ingress *and* every workload at once — already the stated tradeoff in §9's SPOF paragraph, just worth naming ingress specifically here since it's now on that same node by construction, not by coincidence. **Port-conflict risk:** because `hostNetwork: true` binds directly to the worker node's own network namespace, ports 80/443 can only ever be held by one process on that host — if anything else on the worker EC2 instance ever tries to bind 80/443 (a manually-started service on the underlying host, a second `hostNetwork` pod, or a kubelet/system component reusing those ports), ingress-nginx will fail to start with an `address already in use` error. Nothing in this plan intentionally binds 80/443 elsewhere on the worker, but it's worth checking `sudo ss -tlnp | grep -E ':80|:443'` on the worker if the controller pod ever gets stuck in `CrashLoopBackOff`.
+
 - [ ] **Step 3: Write the worker cloud-init — containerd, kubeadm join**
 
 ```yaml
@@ -4488,17 +4594,22 @@ Expected: `Success!` for all three
 
 - [ ] **Step 3: Document apply order (this is where real AWS spend starts — confirm account/region/budget before running)**
 
-```markdown
+````markdown
 # terraform/README.md
 
 ## Apply order (real AWS resources — confirm account, region, and budget first)
 
-1. `cd terraform/environments/shared && terraform init && terraform apply` — provisions the VPC and the two-node kubeadm cluster (control-plane + worker), including a generated SSH key pair (written to `testscope-k8s-keypair.pem` in this directory, gitignored — no pre-existing AWS key pair needed). Note `control_plane_public_ip` from the output; you'll need it, together with that `.pem` file, for `kubectl`/`ssh` access and CI's self-hosted runner registration. Run Task 28's cluster-convergence check (`kubectl get nodes` via SSH) before moving on to step 2.
-2. `cd terraform/environments/dev && terraform init && terraform apply` — provisions dev's S3 bucket, DynamoDB table, SQS queues, IAM policy, CloudWatch alarms.
-3. `cd terraform/environments/prod && terraform init && terraform apply` — same, for prod.
-4. Copy each environment's `bucket_name`/`table_name`/`queue_url` outputs into the matching Kubernetes ConfigMap (`kubernetes/dev/configmap.yaml` / `kubernetes/prod/configmap.yaml`, Task 35) — this hand-off is manual by design (Terraform provisions AWS resources; it does not template Kubernetes manifests).
-5. Tear-down order is the reverse: `prod` → `dev` → `shared` (`terraform destroy` in each), since `dev`/`prod` reference the shared worker instance role by name.
-```
+1. `cd terraform/environments/shared && terraform init && terraform apply` — provisions the VPC and the two-node kubeadm cluster (control-plane + worker), including a generated SSH key pair (written to `testscope-k8s-keypair.pem` in this directory, gitignored — no pre-existing AWS key pair needed). Note **both** `control_plane_public_ip` and `worker_public_ip` from the output — they're different IPs and both are needed, don't assume the control-plane's IP works for anything ingress-related. Run Task 28's cluster-convergence check (`kubectl get nodes` via SSH) before moving on to step 2.
+2. **Point `dev.testscope.local` and `testscope.local` at the WORKER, not the control-plane.** Ingress (Task 28) runs with `hostNetwork: true` on the worker node specifically — the control-plane never serves application traffic (§9). Add `/etc/hosts` entries (or real DNS records, if you have a domain) mapping both hostnames to `worker_public_ip`. If you're only accessing the demo from your own machine, an `/etc/hosts` entry is enough:
+   ```
+   <worker_public_ip>  dev.testscope.local testscope.local
+   ```
+   The self-hosted CI runner (Task 37/38) also needs to resolve these — but since it lives *on* the control-plane EC2 instance, same-VPC, its `/etc/hosts` should point at `worker_private_ip` instead (skips the public internet round-trip; the security group already allows this over the shared cluster security group's self-referencing rule). Add this to the control-plane's `/etc/hosts` as part of runner registration (Task 37's manual setup step).
+3. `cd terraform/environments/dev && terraform init && terraform apply` — provisions dev's S3 bucket, DynamoDB table, SQS queues, IAM policy, CloudWatch alarms.
+4. `cd terraform/environments/prod && terraform init && terraform apply` — same, for prod.
+5. Copy each environment's `bucket_name`/`table_name`/`queue_url` outputs into the matching Kubernetes ConfigMap (`kubernetes/dev/configmap.yaml` / `kubernetes/prod/configmap.yaml`, Task 35) — this hand-off is manual by design (Terraform provisions AWS resources; it does not template Kubernetes manifests).
+6. Tear-down order is the reverse: `prod` → `dev` → `shared` (`terraform destroy` in each), since `dev`/`prod` reference the shared worker instance role by name.
+````
 
 - [ ] **Step 4: Commit**
 
@@ -4586,7 +4697,12 @@ spec:
             requests: { cpu: 250m, memory: 512Mi }
             limits: { cpu: 1000m, memory: 1Gi }
           livenessProbe: { httpGet: { path: /health/live, port: 8080 }, initialDelaySeconds: 10, periodSeconds: 15 }
-          readinessProbe: { httpGet: { path: /health/ready, port: 8080 }, initialDelaySeconds: 10, periodSeconds: 15 }
+          # readinessProbe (not livenessProbe) is the one that checks SQS reachability (Task 17
+          # extends /health/ready for this) — explicit failureThreshold so a few seconds of SQS/
+          # LocalStack startup latency just delays Ready rather than flapping the pod in and out
+          # of any Service/Prometheus scrape rotation. /health/live never checks SQS, so this
+          # can't turn into a restart loop (only liveness failures restart the container).
+          readinessProbe: { httpGet: { path: /health/ready, port: 8080 }, initialDelaySeconds: 10, periodSeconds: 10, failureThreshold: 3 }
 ```
 
 - [ ] **Step 3: Write the shared ConfigMap and root `kustomization.yaml`**
@@ -5133,7 +5249,7 @@ git commit -m "ci: add PR pipeline (lint, unit+MCP integration tests, coverage, 
 - Create: `.github/workflows/deploy-dev.yml`
 - Create: `kubernetes/dev/smoke-test.sh`
 
-**Interfaces:** consumes the same four `service`/`image` pairs as Task 36's build matrix; consumes `kubernetes/dev` overlay from Task 35.
+**Interfaces:** consumes the same four `service`/`image` pairs as Task 36's build matrix; consumes `kubernetes/dev` overlay from Task 35. Requires a self-hosted GitHub Actions runner registered on the control-plane EC2 node (repo Settings → Actions → Runners → New self-hosted runner; run the provided `config.sh`/`run.sh` as a systemd service on that host, labeled `testscope-k8s` to match `runs-on` below) — a one-time manual step, same category as Task 38's Environment setup. While you're on that host for runner registration, also add the `/etc/hosts` entry from Task 31 (`worker_private_ip dev.testscope.local testscope.local`) — the smoke test below curls those hostnames from the control-plane, so without it the deploy job's own smoke test can't resolve them.
 
 - [ ] **Step 1: Write the smoke test script**
 
@@ -5828,6 +5944,8 @@ services:
 ```
 
 `AWS_ENDPOINT_URL` is read automatically by boto3 ≥1.35 for all clients, so `backend/shared/dynamodb.py`/`s3.py`/`sqs.py` and `mcp-server/aws.py` need no code changes to work against LocalStack — this is why those wrappers used bare `boto3.resource(...)`/`boto3.client(...)` with no hardcoded endpoint in every earlier task.
+
+**Two different hostnames for LocalStack, depending on where you are:** `worker`/`api`/`mcp-test-analysis` run *inside* this compose network, so their `AWS_ENDPOINT_URL`/`SQS_QUEUE_URL` correctly use the service DNS name `http://localstack:4566` — that hostname only resolves inside the compose network, never from the host. `scripts/local-e2e-smoke-test.sh` (Step 3) runs on the *host*, but it only ever talks to `http://localhost:8000` (the `api` service's published port), so it never needs to resolve `localstack` itself and works as written. The trap is extending that script later: if you add an `aws --endpoint-url=http://localstack:4566 ...` debugging line to it (e.g., to peek at queue depth), it will fail to connect, because that hostname doesn't exist outside the compose network. From the host, LocalStack is reachable at `http://localhost:4566` instead (published via this file's `ports: ["4566:4566"]`) — use that endpoint for any host-side `aws`/boto3 debugging, or run the command inside the network instead (`docker compose exec mcp-test-analysis env | grep AWS_ENDPOINT_URL` or a one-off `docker compose run --rm localstack-init aws --endpoint-url=http://localstack:4566 sqs list-queues`).
 
 - [ ] **Step 2: Bring the stack up and verify all services report healthy**
 
