@@ -142,9 +142,9 @@ Deployed as its own `mcp-github` service (Docker image `github/github-mcp-server
 
 ## 9. Infrastructure — AWS (Terraform)
 
-- **Networking:** one VPC, public subnet, IGW, route table, security groups (SSH restricted to admin IP, k3s API 6443 internal-only, ingress 80/443 open).
-- **Compute:** a single EC2 instance running **k3s** (control-plane + agent combined). `dev`, `prod`, and `monitoring` are namespaces on this one cluster, not separate clusters.
-- **IAM:** the EC2 instance carries an attached IAM instance profile; pods get AWS access via instance-metadata credentials — no static AWS keys stored as k8s Secrets. Policy scoped to the specific per-env S3 buckets/DynamoDB tables/SQS queues below.
+- **Networking:** one VPC, public subnet, IGW, route table, one security group shared by both nodes (SSH restricted to admin IP; Kubernetes API 6443 internal-only; node-to-node cluster traffic — etcd, kubelet, scheduler/controller-manager, Calico BGP/VXLAN — self-referencing, not open to the internet; ingress 80/443 open).
+- **Compute:** two EC2 instances — one control-plane node and one worker node — joined via `kubeadm`. Container runtime: containerd. CNI: Calico. `dev`, `prod`, and `monitoring` are namespaces on this one cluster, not separate clusters.
+- **IAM:** the worker EC2 instance (where all application pods are scheduled — the control-plane's default `NoSchedule` taint is left in place) carries an attached IAM instance profile; pods get AWS access via instance-metadata credentials — no static AWS keys stored as k8s Secrets. Policy scoped to the specific per-env S3 buckets/DynamoDB tables/SQS queues below. The control-plane node runs no application workloads and does not need this profile.
 - **S3:** `testscope-reports-dev`, `testscope-reports-prod`.
 - **DynamoDB:** `testscope-analyses-dev`, `testscope-analyses-prod` (+ GSI1/GSI2 each).
 - **SQS:** `testscope-jobs-dev` (+ DLQ), `testscope-jobs-prod` (+ DLQ), redrive after 3 receives.
@@ -154,15 +154,17 @@ Deployed as its own `mcp-github` service (Docker image `github/github-mcp-server
 terraform/
 ├── modules/ (networking, ec2, iam, s3, dynamodb, sqs, monitoring)
 ├── environments/
-│   ├── shared/  (VPC, EC2/k3s bootstrap — provisioned once)
+│   ├── shared/  (VPC, EC2 control-plane + worker, kubeadm bootstrap — provisioned once)
 │   ├── dev/     (s3, dynamodb, sqs, iam policy, monitoring — dev-scoped)
 │   └── prod/    (same, prod-scoped)
 └── variables.tf
 ```
 
-**Stated tradeoff — single EC2/k3s host for dev, prod, and monitoring:** running all three environments on one host and one cluster is a deliberate v1 choice, not an implicit gap. It saves significant cost and setup complexity (one VPC, one instance, one k3s install) relative to genuinely isolated clusters per environment. The cost: no real environment isolation (a `prod` resource-exhaustion event can affect `dev`, and vice versa) and a single point of failure (the host going down takes out every environment at once, including monitoring). Acceptable for a course project's scale and demo needs; a production deployment would put at least `prod` on isolated infrastructure.
+**Stated tradeoff — two-node kubeadm cluster (one control-plane, one worker) shared by dev, prod, and monitoring:** running all three environments on one cluster is a deliberate v1 choice, not an implicit gap. It saves significant cost and setup complexity (one VPC, two instances, one kubeadm install) relative to genuinely isolated clusters per environment. The cost: no real environment isolation (a `prod` resource-exhaustion event can affect `dev`, and vice versa) and a single point of failure (the control-plane going down takes the cluster API out for every environment at once, including monitoring, and — since all application pods run on the sole worker node — the worker going down takes out every workload). Acceptable for a course project's scale and demo needs; a production deployment would put at least `prod` on isolated infrastructure with multiple worker nodes.
 
-## 10. Kubernetes Design (k3s, single EC2 host)
+## 10. Kubernetes Design (kubeadm, two-node EC2 cluster)
+
+Two EC2 instances joined via `kubeadm`: one control-plane node (etcd, API server, scheduler, controller-manager) and one worker node (all workloads scheduled here — the control-plane's default `node-role.kubernetes.io/control-plane:NoSchedule` taint is left in place). Container runtime: containerd (systemd cgroup driver). CNI: Calico, applied once after `kubeadm init`.
 
 Namespaces `dev`, `prod`, `monitoring`. Per env: `frontend`, `api`, `worker`, `mcp-test-analysis` (custom), `mcp-github` (official image, its own Deployment+Service — the worker reaches both MCP servers over MCP-over-HTTP).
 
@@ -171,13 +173,13 @@ Namespaces `dev`, `prod`, `monitoring`. Per env: `frontend`, `api`, `worker`, `m
 - **Resources (requests/limits):** `api` 100m/256Mi–500m/512Mi; `worker` 250m/512Mi–1000m/1Gi; MCP servers 200m/256Mi–500m/512Mi; `frontend` 50m/64Mi–200m/256Mi.
 - **`mcp-test-analysis` volume:** `emptyDir` at `/workspace`, `sizeLimit: 2Gi`.
 - **Probes:** `api`/`frontend`/both MCP servers expose `/health/live`, `/health/ready`. `worker` runs a minimal embedded health endpoint (checks SQS reachability) for its own liveness/readiness probes, since its main loop isn't HTTP-driven.
-- **HPA:** `api` scales on CPU (min 1/max 3). `worker` scales on CPU as the MVP signal (native metrics-server, no extra install). True SQS-queue-depth-based scaling would need KEDA or a CloudWatch metrics adapter — documented as a post-MVP enhancement, not built now.
-- **Ingress:** k3s's built-in Traefik, host-based routing (`dev.testscope.local`, `testscope.local`) for the demo environment.
+- **HPA:** `api` scales on CPU (min 1/max 3). `worker` scales on CPU as the MVP signal (metrics-server installed manually via its standard manifest, since kubeadm — unlike k3s — doesn't bundle one). True SQS-queue-depth-based scaling would need KEDA or a CloudWatch metrics adapter — documented as a post-MVP enhancement, not built now.
+- **Ingress:** nginx-ingress controller (`ingress-nginx`), host-based routing (`dev.testscope.local`, `testscope.local`) for the demo environment.
 
 ## 11. CI/CD Pipeline (GitHub Actions)
 
 - **PR pipeline** (GitHub-hosted runners): install deps → lint/format (ruff/black, eslint/prettier) → unit tests (pytest + coverage, Jest) → MCP integration tests → build images (`api`, `worker`, `mcp-test-analysis`, `frontend`) → Trivy image scan → publish results via GitHub Actions job summary + Codecov → required check, blocks merge on failure.
-- **Deploy jobs** (dev on merge to `main`; prod on manual approval via a GitHub Environment protection rule) run on a **self-hosted runner registered on the EC2 host** — avoids exposing the k3s API server to the internet or storing a broadly-scoped kubeconfig as a GitHub secret. Deploy = push versioned images to GHCR → `kubectl apply`/`helm upgrade` to the target namespace → smoke test → report status.
+- **Deploy jobs** (dev on merge to `main`; prod on manual approval via a GitHub Environment protection rule) run on a **self-hosted runner registered on the control-plane EC2 node** (holds the kubeadm admin kubeconfig) — avoids exposing the Kubernetes API server to the internet or storing a broadly-scoped kubeconfig as a GitHub secret. Deploy = push versioned images to GHCR → `kubectl apply`/`helm upgrade` to the target namespace → smoke test → report status.
 
 ## 12. Observability
 
@@ -233,8 +235,8 @@ You must:
 ```
 testscope-ai/
 ├── docs/
-│   ├── spec.md
-│   ├── plan.md
+│   ├── 2026-07-30-testscope-ai-design.md
+│   ├── 2026-07-30-testscope-ai-plan.md
 │   └── test-plan.md
 ├── backend/
 │   ├── api/            (FastAPI service — routes, request/response models, main.py)

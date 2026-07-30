@@ -2,15 +2,15 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Build TestScope AI — an agent that reads a GitHub issue, extracts acceptance criteria, matches them against existing pytest tests, produces a coverage matrix and test plan, and stores/publishes the result — deployed on a self-managed k3s cluster on EC2 with full Terraform/CI/CD/observability, per `docs/spec.md`.
+**Goal:** Build TestScope AI — an agent that reads a GitHub issue, extracts acceptance criteria, matches them against existing pytest tests, produces a coverage matrix and test plan, and stores/publishes the result — deployed on a self-managed, two-node `kubeadm` Kubernetes cluster on EC2 with full Terraform/CI/CD/observability, per `docs/2026-07-30-testscope-ai-design.md`.
 
-**Architecture:** Two backend services (`api`, `worker`) split around an SQS queue; the `worker` runs a LangGraph agent that calls a custom `mcp-test-analysis` MCP server (this repo) and the official `mcp-github` MCP server; results persist to DynamoDB + S3; a React `frontend` talks only to `api`. Everything ships as 4 Docker images to a single k3s cluster (dev/prod/monitoring namespaces) on one EC2 host, provisioned by Terraform.
+**Architecture:** Two backend services (`api`, `worker`) split around an SQS queue; the `worker` runs a LangGraph agent that calls a custom `mcp-test-analysis` MCP server (this repo) and the official `mcp-github` MCP server; results persist to DynamoDB + S3; a React `frontend` talks only to `api`. Everything ships as 4 Docker images to a two-node `kubeadm` cluster (dev/prod/monitoring namespaces) — one control-plane and one worker EC2 instance — provisioned by Terraform.
 
-**Tech Stack:** Python 3.11, FastAPI, LangGraph, Anthropic Claude API (`anthropic` SDK), MCP Python SDK (`mcp`, `FastMCP`), boto3 + moto (tests), pytest, React 18 + TypeScript + Vite + Vitest, Terraform ≥1.5, k3s, GitHub Actions.
+**Tech Stack:** Python 3.11, FastAPI, LangGraph, Anthropic Claude API (`anthropic` SDK), MCP Python SDK (`mcp`, `FastMCP`), boto3 + moto (tests), pytest, React 18 + TypeScript + Vite + Vitest, Terraform ≥1.5, Kubernetes via `kubeadm` (containerd + Calico + nginx-ingress), GitHub Actions.
 
 ## Global Constraints
 
-Copied verbatim from `docs/spec.md` — every task's requirements implicitly include these:
+Copied verbatim from `docs/2026-07-30-testscope-ai-design.md` — every task's requirements implicitly include these:
 
 - **LLM:** Anthropic Claude API only. Model id is a single named constant (`ANTHROPIC_MODEL` env var, default `claude-sonnet-4-5-20250929`) in `backend/worker/app/config.py` — never hardcoded elsewhere.
 - **Test framework scope:** v1 analyzes Python/pytest tests only.
@@ -29,7 +29,7 @@ Copied verbatim from `docs/spec.md` — every task's requirements implicitly inc
 - **AWS mocking in tests:** `moto` for S3/DynamoDB/SQS — never hit real AWS from unit or MCP-integration tests.
 - **LLM mocking in tests:** a stub Anthropic client returning canned JSON — never call the real Claude API from automated tests (cost/determinism/CI speed).
 - **MCP integration tests:** real MCP transport against a local fixture repo (small bare git repo under `mcp-server/tests/fixtures/`, cloned from a local path — no network).
-- **K8s:** single EC2 host, k3s, namespaces `dev`/`prod`/`monitoring`. Images built: `api`, `worker`, `mcp-test-analysis`, `frontend` (4 images, pushed to GHCR).
+- **K8s:** two EC2 hosts (one `kubeadm` control-plane, one worker), containerd runtime, Calico CNI, nginx-ingress, namespaces `dev`/`prod`/`monitoring`. Images built: `api`, `worker`, `mcp-test-analysis`, `frontend` (4 images, pushed to GHCR).
 - **Coverage target:** ≥80% unit test coverage on core agent/MCP logic (tracked in the PR pipeline).
 
 ---
@@ -3766,16 +3766,16 @@ git commit -m "build(frontend): add multi-stage Dockerfile (nginx)"
 
 Infra tasks aren't TDD in the pytest sense; each task's "test" step is `terraform validate`/`plan` (and, where noted, an actual `apply` against a real AWS account — flagged explicitly since that's a real-money, real-infrastructure action the implementer should confirm before running).
 
-### Task 27: `networking` and `ec2` modules + `shared` environment (VPC, k3s bootstrap)
+### Task 27: `networking` and `ec2` modules + `shared` environment (VPC, EC2 control-plane + worker, kubeadm bootstrap)
 
 **Files:**
 - Create: `terraform/modules/networking/main.tf`, `variables.tf`, `outputs.tf`
-- Create: `terraform/modules/ec2/main.tf`, `variables.tf`, `outputs.tf`, `cloud-init.yaml.tpl`
+- Create: `terraform/modules/ec2/main.tf`, `variables.tf`, `outputs.tf`, `cloud-init-control-plane.yaml.tpl`, `cloud-init-worker.yaml.tpl`
 - Create: `terraform/environments/shared/main.tf`, `variables.tf`, `backend.tf`
 
 **Interfaces:**
 - Produces (`networking` module outputs): `vpc_id`, `public_subnet_id`, `security_group_id` — consumed by `ec2` module.
-- Produces (`ec2` module outputs): `instance_public_ip`, `instance_id` — consumed by Task 29 (deploy jobs need the IP for the self-hosted runner) and by `environments/dev`/`environments/prod` (Task 29) for IAM instance-profile attachment references.
+- Produces (`ec2` module outputs): `control_plane_public_ip`, `control_plane_private_ip`, `control_plane_id`, `worker_public_ip`, `worker_id`, `worker_iam_role_arn` — consumed by Task 29 (deploy jobs need `control_plane_public_ip` for the self-hosted runner) and by `environments/dev`/`environments/prod` (Task 29) for IAM instance-profile attachment references.
 
 - [ ] **Step 1: Write `networking` module**
 
@@ -3811,14 +3811,15 @@ resource "aws_route_table_association" "public" {
   route_table_id = aws_route_table.public.id
 }
 
-resource "aws_security_group" "k3s_host" {
-  name   = "testscope-k3s-host"
+resource "aws_security_group" "k8s_cluster" {
+  name   = "testscope-k8s-cluster"
   vpc_id = aws_vpc.main.id
 
   ingress { description = "SSH from admin"; from_port = 22; to_port = 22; protocol = "tcp"; cidr_blocks = [var.admin_cidr] }
-  ingress { description = "k3s API"; from_port = 6443; to_port = 6443; protocol = "tcp"; cidr_blocks = [var.admin_cidr] }
+  ingress { description = "Kubernetes API"; from_port = 6443; to_port = 6443; protocol = "tcp"; cidr_blocks = [var.admin_cidr] }
   ingress { description = "HTTP ingress"; from_port = 80; to_port = 80; protocol = "tcp"; cidr_blocks = ["0.0.0.0/0"] }
   ingress { description = "HTTPS ingress"; from_port = 443; to_port = 443; protocol = "tcp"; cidr_blocks = ["0.0.0.0/0"] }
+  ingress { description = "Cluster-internal (etcd, kubelet, scheduler/controller-manager, kubeadm join, Calico BGP/VXLAN)"; from_port = 0; to_port = 65535; protocol = "-1"; self = true }
   egress { from_port = 0; to_port = 0; protocol = "-1"; cidr_blocks = ["0.0.0.0/0"] }
 }
 ```
@@ -3833,49 +3834,117 @@ variable "admin_cidr" { type = string, description = "Your IP in CIDR form, e.g.
 # terraform/modules/networking/outputs.tf
 output "vpc_id" { value = aws_vpc.main.id }
 output "public_subnet_id" { value = aws_subnet.public.id }
-output "security_group_id" { value = aws_security_group.k3s_host.id }
+output "security_group_id" { value = aws_security_group.k8s_cluster.id }
 ```
 
-- [ ] **Step 2: Write `ec2` module with k3s cloud-init bootstrap**
+- [ ] **Step 2: Write `ec2` module — control-plane + worker instances with kubeadm cloud-init bootstrap**
 
 ```hcl
 # terraform/modules/ec2/main.tf
-resource "aws_iam_role" "k3s_host" {
-  name = "testscope-k3s-host-role"
+resource "aws_iam_role" "worker" {
+  name = "testscope-k8s-worker-role"
   assume_role_policy = jsonencode({
     Version = "2012-10-17"
     Statement = [{ Action = "sts:AssumeRole", Effect = "Allow", Principal = { Service = "ec2.amazonaws.com" } }]
   })
 }
 
-resource "aws_iam_instance_profile" "k3s_host" {
-  name = "testscope-k3s-host-profile"
-  role = aws_iam_role.k3s_host.name
+resource "aws_iam_instance_profile" "worker" {
+  name = "testscope-k8s-worker-profile"
+  role = aws_iam_role.worker.name
 }
 
-resource "aws_instance" "k3s_host" {
+# kubeadm bootstrap token, format [a-z0-9]{6}.[a-z0-9]{16} — generated once so both
+# instances' cloud-init can agree on it without an out-of-band handoff step.
+resource "random_string" "kubeadm_token_id" {
+  length  = 6
+  special = false
+  upper   = false
+}
+
+resource "random_string" "kubeadm_token_secret" {
+  length  = 16
+  special = false
+  upper   = false
+}
+
+locals {
+  kubeadm_token = "${random_string.kubeadm_token_id.result}.${random_string.kubeadm_token_secret.result}"
+}
+
+resource "aws_instance" "control_plane" {
   ami                    = var.ami_id
   instance_type          = var.instance_type
   subnet_id              = var.public_subnet_id
   vpc_security_group_ids = [var.security_group_id]
-  iam_instance_profile   = aws_iam_instance_profile.k3s_host.name
   key_name               = var.key_pair_name
-  user_data              = templatefile("${path.module}/cloud-init.yaml.tpl", {})
+  user_data = templatefile("${path.module}/cloud-init-control-plane.yaml.tpl", {
+    kubeadm_token = local.kubeadm_token
+  })
 
   root_block_device { volume_size = 40 }
-  tags = { Name = "testscope-k3s-host" }
+  tags = { Name = "testscope-k8s-control-plane" }
+}
+
+resource "aws_instance" "worker" {
+  ami                    = var.ami_id
+  instance_type          = var.instance_type
+  subnet_id              = var.public_subnet_id
+  vpc_security_group_ids = [var.security_group_id]
+  iam_instance_profile   = aws_iam_instance_profile.worker.name
+  key_name               = var.key_pair_name
+  user_data = templatefile("${path.module}/cloud-init-worker.yaml.tpl", {
+    kubeadm_token             = local.kubeadm_token
+    control_plane_private_ip = aws_instance.control_plane.private_ip
+  })
+
+  root_block_device { volume_size = 40 }
+  tags = { Name = "testscope-k8s-worker" }
 }
 ```
 
 ```yaml
-# terraform/modules/ec2/cloud-init.yaml.tpl
+# terraform/modules/ec2/cloud-init-control-plane.yaml.tpl
 #cloud-config
 runcmd:
-  - curl -sfL https://get.k3s.io | sh -s - --write-kubeconfig-mode 644
-  - k3s kubectl create namespace dev
-  - k3s kubectl create namespace prod
-  - k3s kubectl create namespace monitoring
+  - apt-get update && apt-get install -y apt-transport-https ca-certificates curl gpg containerd
+  - mkdir -p /etc/containerd && containerd config default | tee /etc/containerd/config.toml
+  - sed -i 's/SystemdCgroup = false/SystemdCgroup = true/' /etc/containerd/config.toml
+  - systemctl restart containerd
+  - mkdir -p /etc/apt/keyrings
+  - curl -fsSL https://pkgs.k8s.io/core:/stable:/v1.30/deb/Release.key | gpg --dearmor -o /etc/apt/keyrings/kubernetes-apt-keyring.gpg
+  - echo 'deb [signed-by=/etc/apt/keyrings/kubernetes-apt-keyring.gpg] https://pkgs.k8s.io/core:/stable:/v1.30/deb/ /' | tee /etc/apt/sources.list.d/kubernetes.list
+  - apt-get update && apt-get install -y kubelet kubeadm kubectl && apt-mark hold kubelet kubeadm kubectl
+  - kubeadm init --token=${kubeadm_token} --token-ttl=0 --pod-network-cidr=192.168.0.0/16
+  - mkdir -p /home/ubuntu/.kube
+  - cp -i /etc/kubernetes/admin.conf /home/ubuntu/.kube/config
+  - chown ubuntu:ubuntu /home/ubuntu/.kube/config
+  - kubectl --kubeconfig=/etc/kubernetes/admin.conf apply -f https://raw.githubusercontent.com/projectcalico/calico/v3.28.0/manifests/calico.yaml
+  - kubectl --kubeconfig=/etc/kubernetes/admin.conf create namespace dev
+  - kubectl --kubeconfig=/etc/kubernetes/admin.conf create namespace prod
+  - kubectl --kubeconfig=/etc/kubernetes/admin.conf create namespace monitoring
+  - kubectl --kubeconfig=/etc/kubernetes/admin.conf apply -f https://raw.githubusercontent.com/kubernetes/ingress-nginx/controller-v1.11.0/deploy/static/provider/baremetal/deploy.yaml
+  - kubectl --kubeconfig=/etc/kubernetes/admin.conf apply -f https://github.com/kubernetes-sigs/metrics-server/releases/latest/download/components.yaml
+  - kubectl --kubeconfig=/etc/kubernetes/admin.conf patch deployment metrics-server -n kube-system --type=json -p='[{"op":"add","path":"/spec/template/spec/containers/0/args/-","value":"--kubelet-insecure-tls"}]'
 ```
+
+```yaml
+# terraform/modules/ec2/cloud-init-worker.yaml.tpl
+#cloud-config
+runcmd:
+  - apt-get update && apt-get install -y apt-transport-https ca-certificates curl gpg containerd
+  - mkdir -p /etc/containerd && containerd config default | tee /etc/containerd/config.toml
+  - sed -i 's/SystemdCgroup = false/SystemdCgroup = true/' /etc/containerd/config.toml
+  - systemctl restart containerd
+  - mkdir -p /etc/apt/keyrings
+  - curl -fsSL https://pkgs.k8s.io/core:/stable:/v1.30/deb/Release.key | gpg --dearmor -o /etc/apt/keyrings/kubernetes-apt-keyring.gpg
+  - echo 'deb [signed-by=/etc/apt/keyrings/kubernetes-apt-keyring.gpg] https://pkgs.k8s.io/core:/stable:/v1.30/deb/ /' | tee /etc/apt/sources.list.d/kubernetes.list
+  - apt-get update && apt-get install -y kubelet kubeadm && apt-mark hold kubelet kubeadm
+  - until nc -z ${control_plane_private_ip} 6443; do sleep 10; done
+  - kubeadm join ${control_plane_private_ip}:6443 --token=${kubeadm_token} --discovery-token-unsafe-skip-ca-verification
+```
+
+**Stated tradeoff — `--discovery-token-unsafe-skip-ca-verification`:** the worker joins without verifying the control-plane's CA cert hash, since automating that handoff (fetching the live cert hash into Terraform mid-apply) adds meaningful complexity for a two-node, same-VPC, single-security-group demo cluster. A production setup would pass `--discovery-token-ca-cert-hash` instead.
 
 ```hcl
 # terraform/modules/ec2/variables.tf
@@ -3888,14 +3957,22 @@ variable "key_pair_name" { type = string }
 
 ```hcl
 # terraform/modules/ec2/outputs.tf
-output "instance_public_ip" { value = aws_instance.k3s_host.public_ip }
-output "instance_id" { value = aws_instance.k3s_host.id }
-output "iam_role_arn" { value = aws_iam_role.k3s_host.arn }
+output "control_plane_public_ip" { value = aws_instance.control_plane.public_ip }
+output "control_plane_private_ip" { value = aws_instance.control_plane.private_ip }
+output "control_plane_id" { value = aws_instance.control_plane.id }
+output "worker_public_ip" { value = aws_instance.worker.public_ip }
+output "worker_id" { value = aws_instance.worker.id }
+output "worker_iam_role_arn" { value = aws_iam_role.worker.arn }
 ```
 
 ```hcl
 # terraform/environments/shared/main.tf
-terraform { required_version = ">= 1.5" }
+terraform {
+  required_version = ">= 1.5"
+  required_providers {
+    random = { source = "hashicorp/random", version = "~> 3.6" }
+  }
+}
 provider "aws" { region = var.aws_region }
 
 module "networking" {
@@ -3912,8 +3989,9 @@ module "ec2" {
   key_pair_name      = var.key_pair_name
 }
 
-output "instance_public_ip" { value = module.ec2.instance_public_ip }
-output "iam_role_arn" { value = module.ec2.iam_role_arn }
+output "control_plane_public_ip" { value = module.ec2.control_plane_public_ip }
+output "worker_public_ip" { value = module.ec2.worker_public_ip }
+output "worker_iam_role_arn" { value = module.ec2.worker_iam_role_arn }
 ```
 
 ```hcl
@@ -3933,7 +4011,7 @@ Expected: `Success! The configuration is valid.`
 
 ```bash
 git add terraform/modules/networking terraform/modules/ec2 terraform/environments/shared
-git commit -m "feat(terraform): add networking and ec2 modules, shared environment (VPC + k3s host)"
+git commit -m "feat(terraform): add networking and ec2 modules, shared environment (VPC + kubeadm control-plane/worker)"
 ```
 
 ### Task 28: `iam`, `s3`, `dynamodb`, `sqs` modules (parameterized by env)
@@ -4099,7 +4177,7 @@ git commit -m "feat(terraform): add iam, s3, dynamodb, sqs modules parameterized
 - Create: `terraform/environments/prod/main.tf`, `variables.tf`, `backend.tf`
 
 **Interfaces:**
-- Consumes: `iam_role_arn`, `instance_public_ip` outputs from `environments/shared` (Task 27, referenced via `terraform_remote_state` data source) and the `s3`/`dynamodb`/`sqs`/`iam` modules (Task 28).
+- Consumes: `worker_iam_role_arn`, `control_plane_public_ip`, `worker_public_ip` outputs from `environments/shared` (Task 27, referenced via `terraform_remote_state` data source) and the `s3`/`dynamodb`/`sqs`/`iam` modules (Task 28).
 - Produces: per-env `bucket_name`, `table_name`, `queue_url` outputs — consumed directly by Task 34's K8s ConfigMap values (copied in manually per spec's "no manual clicking" caveat being about AWS resources, not about transcribing Terraform outputs into K8s config, which is standard practice; Task 34 documents this as a required manual step between `terraform apply` and `kubectl apply`).
 
 - [ ] **Step 1: Write `monitoring` module (CloudWatch alarms + SNS, per spec §12)**
@@ -4168,7 +4246,7 @@ module "sqs" { source = "../../modules/sqs"; env = "dev" }
 module "iam" {
   source              = "../../modules/iam"
   env                 = "dev"
-  instance_role_name  = "testscope-k3s-host-role"
+  instance_role_name  = "testscope-k8s-worker-role"
   bucket_arn          = module.s3.bucket_arn
   table_arn           = module.dynamodb.table_arn
   queue_arn           = module.sqs.queue_arn
@@ -4192,7 +4270,7 @@ variable "aws_region" { type = string, default = "us-east-1" }
 variable "alert_email" { type = string }
 ```
 
-Create `terraform/environments/prod/main.tf` identically, substituting `env = "prod"` everywhere and pointing `data.terraform_remote_state` at the same shared state (the EC2 host/IAM role is shared across both envs — only the AWS resources differ).
+Create `terraform/environments/prod/main.tf` identically, substituting `env = "prod"` everywhere and pointing `data.terraform_remote_state` at the same shared state (the EC2 control-plane/worker instances and worker IAM role are shared across both envs — only the AWS resources differ).
 
 - [ ] **Step 3: Validate both**
 
@@ -4230,11 +4308,11 @@ Expected: `Success!` for all three
 
 ## Apply order (real AWS resources — confirm account, region, and budget first)
 
-1. `cd terraform/environments/shared && terraform init && terraform apply` — provisions the VPC and the single k3s EC2 host. Note `instance_public_ip` from the output; you'll need it for `kubectl` access and CI's self-hosted runner registration.
+1. `cd terraform/environments/shared && terraform init && terraform apply` — provisions the VPC and the two-node kubeadm cluster (control-plane + worker). Note `control_plane_public_ip` from the output; you'll need it for `kubectl` access and CI's self-hosted runner registration.
 2. `cd terraform/environments/dev && terraform init && terraform apply` — provisions dev's S3 bucket, DynamoDB table, SQS queues, IAM policy, CloudWatch alarms.
 3. `cd terraform/environments/prod && terraform init && terraform apply` — same, for prod.
 4. Copy each environment's `bucket_name`/`table_name`/`queue_url` outputs into the matching Kubernetes ConfigMap (`kubernetes/dev/configmap.yaml` / `kubernetes/prod/configmap.yaml`, Task 34) — this hand-off is manual by design (Terraform provisions AWS resources; it does not template Kubernetes manifests).
-5. Tear-down order is the reverse: `prod` → `dev` → `shared` (`terraform destroy` in each), since `dev`/`prod` reference the shared instance role by name.
+5. Tear-down order is the reverse: `prod` → `dev` → `shared` (`terraform destroy` in each), since `dev`/`prod` reference the shared worker instance role by name.
 ```
 
 - [ ] **Step 4: Commit**
@@ -4246,7 +4324,7 @@ git commit -m "docs(terraform): document validated fmt/validate pass and apply o
 
 ---
 
-## Phase 7 — Kubernetes Manifests (k3s)
+## Phase 7 — Kubernetes Manifests (kubeadm cluster)
 
 Base manifests are environment-agnostic; `kustomize` overlays (Task 34) patch in per-namespace values. Every manifest that needs a real image reference uses `ghcr.io/<org>/testscope-<service>:latest` as a placeholder tag — Task 34's overlays pin the actual tag (set by CI, Task 36/37).
 
@@ -4514,7 +4592,7 @@ git add kubernetes/base/mcp-test-analysis kubernetes/base/mcp-github kubernetes/
 git commit -m "feat(k8s): add mcp-test-analysis and mcp-github manifests; add health endpoints to mcp-server"
 ```
 
-### Task 33: `frontend` manifests + Ingress (Traefik)
+### Task 33: `frontend` manifests + Ingress (nginx-ingress)
 
 **Files:**
 - Create: `kubernetes/base/frontend/deployment.yaml`, `service.yaml`
@@ -4579,9 +4657,8 @@ apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
   name: testscope-ingress
-  annotations:
-    kubernetes.io/ingress.class: traefik
 spec:
+  ingressClassName: nginx
   rules:
     - host: REPLACED_BY_OVERLAY  # dev.testscope.local / testscope.local, see Task 34
       http:
@@ -4607,7 +4684,7 @@ Expected: all resources listed, no parse errors
 
 ```bash
 git add kubernetes/base/frontend kubernetes/base/ingress.yaml kubernetes/base/kustomization.yaml frontend/nginx.conf frontend/Dockerfile
-git commit -m "feat(k8s): add frontend manifests, Traefik ingress, nginx API proxy config"
+git commit -m "feat(k8s): add frontend manifests, nginx-ingress Ingress, nginx API proxy config"
 ```
 
 ### Task 34: `dev`/`prod` kustomize overlays (namespace, HPA, env-specific config) + validation
@@ -4889,7 +4966,7 @@ fi
 echo "Smoke test passed."
 ```
 
-- [ ] **Step 2: Write the deploy workflow (runs on a self-hosted runner registered on the EC2 k3s host)**
+- [ ] **Step 2: Write the deploy workflow (runs on a self-hosted runner registered on the control-plane EC2 node)**
 
 ```yaml
 # .github/workflows/deploy-dev.yml
@@ -4922,7 +4999,7 @@ jobs:
 
   deploy:
     needs: [build-and-push]
-    runs-on: [self-hosted, testscope-k3s]
+    runs-on: [self-hosted, testscope-k8s]
     steps:
       - uses: actions/checkout@v4
       - name: Update image tags and apply
@@ -4989,7 +5066,7 @@ jobs:
 
   deploy:
     needs: [build-and-push]
-    runs-on: [self-hosted, testscope-k3s]
+    runs-on: [self-hosted, testscope-k8s]
     environment: production  # requires a manual reviewer approval, configured once in repo Settings > Environments
     steps:
       - uses: actions/checkout@v4
@@ -5016,7 +5093,7 @@ Expected: no output
 Before `deploy-prod.yml` can run: create a GitHub Environment named `production`
 (repo Settings > Environments > New environment), add at least one required reviewer.
 Before either deploy workflow can run: register a self-hosted runner with label
-`testscope-k3s` on the EC2 k3s host (repo Settings > Actions > Runners > New self-hosted
+`testscope-k8s` on the control-plane EC2 node (repo Settings > Actions > Runners > New self-hosted
 runner; run the provided `config.sh`/`run.sh` as a systemd service on the host).
 ```
 
@@ -5493,7 +5570,7 @@ git commit -m "feat(local): add full-stack docker-compose (LocalStack + all serv
 
 ## Plan Self-Review
 
-**Spec coverage:** every numbered section of `docs/spec.md` maps to at least one task — §3 architecture (Tasks 1, 8, 17, 41), §4 workflow (Tasks 10–17), §5 MCP tooling (Tasks 2–8, 11, 22), §6 data model (Task 9), §7 API (Tasks 18–22), §8 UI (Tasks 23–26), §9 Terraform/AWS (Tasks 27–30, 40), §10 K8s (Tasks 31–34), §11 CI/CD (Tasks 35–37), §12 observability (Tasks 38–40), §13 error handling (covered inline across Tasks 10–17's failure-handling steps), §14 testing strategy (every task's TDD steps + Task 8/17's MCP-transport and stub-LLM E2E tests + Task 41's local full E2E). No spec section lacks a task.
+**Spec coverage:** every numbered section of `docs/2026-07-30-testscope-ai-design.md` maps to at least one task — §3 architecture (Tasks 1, 8, 17, 41), §4 workflow (Tasks 10–17), §5 MCP tooling (Tasks 2–8, 11, 22), §6 data model (Task 9), §7 API (Tasks 18–22), §8 UI (Tasks 23–26), §9 Terraform/AWS (Tasks 27–30, 40), §10 K8s (Tasks 31–34), §11 CI/CD (Tasks 35–37), §12 observability (Tasks 38–40), §13 error handling (covered inline across Tasks 10–17's failure-handling steps), §14 testing strategy (every task's TDD steps + Task 8/17's MCP-transport and stub-LLM E2E tests + Task 41's local full E2E). No spec section lacks a task.
 
 **Placeholder scan:** no "TBD"/"TODO"/"handle appropriately" language appears; every step shows real code, real commands, and real expected output. The two places that look like placeholders (`REPLACED_BY_OVERLAY` in `kubernetes/base/configmap.yaml`/`ingress.yaml`, `PASTE_FROM_TERRAFORM_OUTPUT_queue_url` in the overlays) are intentional and documented — they're the literal manual hand-off point between `terraform apply` output and `kubectl apply` input described in Task 30, not unfinished plan content.
 
@@ -5501,7 +5578,7 @@ git commit -m "feat(local): add full-stack docker-compose (LocalStack + all serv
 
 ---
 
-**Plan complete and saved to `docs/plan.md`.** Two execution options:
+**Plan complete and saved to `docs/2026-07-30-testscope-ai-plan.md`.** Two execution options:
 
 **1. Subagent-Driven (recommended)** — I dispatch a fresh subagent per task, review between tasks, fast iteration
 
