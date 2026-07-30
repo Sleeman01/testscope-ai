@@ -31,6 +31,7 @@ Copied verbatim from `docs/2026-07-30-testscope-ai-design.md` — every task's r
 - **MCP integration tests:** real MCP transport against a local fixture repo (small bare git repo under `mcp-server/tests/fixtures/`, cloned from a local path — no network).
 - **K8s:** two EC2 hosts (one `kubeadm` control-plane, one worker), containerd runtime, Calico CNI, nginx-ingress, namespaces `dev`/`prod`/`monitoring`. Images built: `api`, `worker`, `mcp-test-analysis`, `frontend` (4 images, pushed to GHCR).
 - **Coverage target:** ≥80% unit test coverage on core agent/MCP logic (tracked in the PR pipeline).
+- **Python venv:** all four Python packages install into one repo-root `.venv` (`python3 -m venv .venv && source .venv/bin/activate`) — the OS Python is externally managed (PEP 668) and blocks direct `pip install`. Confirm with `which python` that it resolves inside `.venv` before running any `pip install`.
 
 ---
 
