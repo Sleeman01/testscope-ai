@@ -1,0 +1,32 @@
+# Python
+__pycache__/
+*.pyc
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+dist/
+build/
+.venv/
+venv/
+
+# Node / frontend
+node_modules/
+frontend/dist/
+
+# Local workspace clones used by mcp-test-analysis
+/workspace/
+
+# Secrets / generated credentials
+*.pem
+.env
+.env.*
+terraform.tfstate
+terraform.tfstate.backup
+.terraform/
+
+# Editor/OS
+.DS_Store
+.vscode/
+.idea/

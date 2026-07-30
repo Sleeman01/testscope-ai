@@ -272,3 +272,12 @@ testscope-ai/
 ## 17. Post-MVP / Stretch
 
 Compare two analyses, export PDF reports, PR-level analysis, multi-framework support (JS/Jest/Playwright), test-code skeleton generation, user feedback capture, changed-requirement detection, KEDA/queue-depth-based worker autoscaling, specialized sub-agent decomposition, reusable project skill (per the assignment's optional extra-credit track).
+
+## 18. Known Security Limitations (v1)
+
+`npm audit` on `frontend/` reports 7 findings (1 critical, 1 high, 5 moderate) as of Task 1's scaffolding. Accepted as a documented v1 limitation rather than fixed, for the following reasons:
+
+- **`vitest` (critical, `GHSA-5xrq-8626-4rwp`), `vite` (high, `fs.deny` bypass) and `esbuild` (moderate, dev-server request forwarding):** all three are dev-tooling-only — the vulnerable surface is either the Vitest `--ui` server (never invoked; the `test` script runs `vitest run`, and `@vitest/ui` isn't even installed) or the Vite dev server (`npm run dev`, used only for local development). None of these packages or code paths are present in the production artifact — `frontend/Dockerfile` builds static assets via `vite build` and serves them from `nginx:1.27-alpine`, which never runs vite/vitest/esbuild. Unreachable in CI or production.
+- **`react-router-dom` (moderate, open-redirect via `<Link>`/`useNavigate`, `GHSA-jjmj-jmhj-qwj2`):** a real runtime dependency that does ship to production, but accepted for v1 because the API (§7) has no authentication and is explicitly internal-only — there's no session/credential for an open redirect to help exfiltrate, and the app is not exposed to the public internet. Fixing requires a v6→v7 migration (the entire `6.x` line, including the latest `6.30.4`, is within the vulnerable range; no patch exists short of the major version); deferred to post-MVP if this project continues past the course.
+
+None of the 7 findings have a fix available via plain `npm audit fix` (verified — it changes nothing without `--force`); resolving any of them means bumping a dependency past the major version this plan pins (`vite ^5.4.10`, `vitest ^2.1.4`, `react-router-dom ^6.27.0`).
