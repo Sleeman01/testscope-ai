@@ -72,12 +72,26 @@ housekeeping like this entry uses `docs/<short-description>` instead)
 
 ## Open Questions / Things to Revisit
 
-- **Phase 0's "process fix" entry above may overstate the venv issue.** Re-checked during
-  this update (per CLAUDE.md's "don't trust the log's claims if out of sync with the repo"
-  rule): at the time, every actual `pip install`/`pytest` invocation had `.venv` activated
-  in the same shell call, and `testscope-*` packages were confirmed present only in
-  `.venv/lib/.../site-packages`, never in system site-packages. The `fix/venv-isolation` PR
-  (adding the README/plan.md setup step and the standing "check `which python`" habit) was
-  still worth doing, but "packages were installed into system Python" as a factual claim
-  didn't hold up — leaving the original wording in the Phase 0 entry as the contemporaneous
-  record, flagging the correction here instead of rewriting history.
+- **Correction to Phase 0's "process fix" entry above** (its literal wording is left as the
+  contemporaneous record; this is the verified follow-up, per CLAUDE.md's "don't trust the
+  log's claims if out of sync with the repo" rule). Re-checked by running `which python`,
+  `which python3`, `python3 -m pip show boto3`, and inspecting package locations directly:
+  1. **True system `dist-packages` was never touched.** `/usr/lib/python3/dist-packages`
+     has no `boto3`/`testscope-*` and no matching `dpkg` package — ruled out entirely.
+  2. **The real risk was PEP 668 not blocking user-site (`~/.local`) resolution.** This
+     machine's `EXTERNALLY-MANAGED` marker blocks bare system-wide `pip install`, but a
+     pre-existing personal toolkit already sits in `~/.local/lib/python3.12/site-packages`
+     (boto3, mcp, pydantic, httpx, paramiko, etc. — dated ~6 days before this repo's first
+     commit, unrelated to this project). Without an active `.venv`, a bare `python3`/`pip3`
+     command silently resolves against that unrelated, unpinned copy instead of erroring —
+     creating false confidence that "it's installed" when the project's own editable
+     packages aren't on the path at all.
+  3. **`.venv` correctly isolates the project.** Confirmed via `.venv/pyvenv.cfg`
+     (`include-system-site-packages = false`) and by checking package locations directly:
+     `.venv` has its own independent `boto3` (pulled in by `testscope-api`/`-worker`/
+     `-shared`/`-mcp`/`moto`), and all four `testscope-*` packages exist only inside
+     `.venv`, never in system or user site-packages.
+
+  Net: the `fix/venv-isolation` PR's outcome (require `.venv`, check `which python` first)
+  was the right call, just for this more precise reason — not "system Python pollution,"
+  but "silent fallback to an unrelated pre-existing toolkit masking a missing venv."
