@@ -20,7 +20,16 @@ See:
 
 ## Local Development
 
-Each Python service is an independently installable package:
+**Required setup step:** create and activate a repo-root virtualenv before installing anything.
+The OS Python is externally managed (PEP 668) and refuses direct `pip install`:
+
+```bash
+python3 -m venv .venv
+source .venv/bin/activate   # run this in every new shell before pip/python commands below
+which python                # confirm it resolves inside .venv before installing
+```
+
+Each Python service is an independently installable package, installed into that same `.venv`:
 
 ```bash
 cd backend/api && pip install -e ".[dev]" && python -m pytest
