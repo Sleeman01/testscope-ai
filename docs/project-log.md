@@ -19,9 +19,11 @@ Update this after each phase (or whenever something worth remembering happens).
 
 ## Current State
 
-**Phase:** 0 (complete, merged) → about to start Phase 1
-**Branch pattern in use:** `feature/phase-<N>-<short-description>`, one PR per phase
-**Last merged:** `fix/venv-isolation` → `main`
+**Phase:** 0 (complete, merged) → about to start Phase 1 (no Phase 1 code written yet)
+**Branch pattern in use:** `feature/phase-<N>-<short-description>`, one PR per phase (docs-only
+housekeeping like this entry uses `docs/<short-description>` instead)
+**Current branch:** `docs/project-log-update` (fresh off `main`, this update only)
+**Last merged:** `docs/claude-md` → `main` (PR #8)
 
 ---
 
@@ -59,12 +61,23 @@ Update this after each phase (or whenever something worth remembering happens).
   venv. Fixed via a separate small PR (`fix/venv-isolation`) — `.venv` now required, documented
   in README.
 
-### Phase 1 — [fill in title from plan.md] — not started
-- Tasks: [fill in task range]
-- Branch: [fill in once created]
+### Phase 1 — Custom MCP Server (`mcp-test-analysis`) — not started
+- Tasks: 2–8 (`extract_test_metadata` → `find_test_files`/`WorkspaceManager` →
+  `read_test_file` → `cleanup_workspace`/sweeper → `save_coverage_report` →
+  `get_previous_analysis` → server wiring/`FastMCP`/MCP integration test)
+- Branch: not yet created (will be `feature/phase-1-mcp-test-analysis` or similar per
+  the branch pattern above)
 
 ---
 
 ## Open Questions / Things to Revisit
 
-- (none yet)
+- **Phase 0's "process fix" entry above may overstate the venv issue.** Re-checked during
+  this update (per CLAUDE.md's "don't trust the log's claims if out of sync with the repo"
+  rule): at the time, every actual `pip install`/`pytest` invocation had `.venv` activated
+  in the same shell call, and `testscope-*` packages were confirmed present only in
+  `.venv/lib/.../site-packages`, never in system site-packages. The `fix/venv-isolation` PR
+  (adding the README/plan.md setup step and the standing "check `which python`" habit) was
+  still worth doing, but "packages were installed into system Python" as a factual claim
+  didn't hold up — leaving the original wording in the Phase 0 entry as the contemporaneous
+  record, flagging the correction here instead of rewriting history.
