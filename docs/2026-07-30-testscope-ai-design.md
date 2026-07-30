@@ -97,7 +97,7 @@ Steps 2–12 are `StateGraph` nodes. Job Intake (1) and Cleanup (13) are numbere
 
 ### 5.2 GitHub MCP (official server)
 
-Deployed as its own `mcp-github` service (Docker image `github/github-mcp-server`). Tools used: `get_repository`, `get_issue`, `get_issue_comments` (read-only, used throughout the workflow), and `create_issue` (write — called **only** from the `POST /api/analyses/{id}/github-issue` endpoint, after explicit user approval; never from the automated workflow).
+Deployed as its own `mcp-github` service (Docker image `github/github-mcp-server`). Tools used: `get_repository`, `get_issue`, `get_issue_comments` (read-only, used throughout the workflow), and `create_issue` (write — called **only** from the `POST /api/analyses/{id}/github-issue` endpoint, after explicit user approval; never from the automated workflow). These tool names and their response field names (`default_branch`, `size`, `body`, `comments`, `html_url`) are this design's assumption, not a guarantee of the upstream image — plan.md's Task 8 verifies them against the real deployed server before any code that depends on them is written.
 
 ## 6. Data Model
 
@@ -163,7 +163,7 @@ terraform/
 └── variables.tf
 ```
 
-**Stated tradeoff — two-node kubeadm cluster (one control-plane, one worker) shared by dev, prod, and monitoring:** running all three environments on one cluster is a deliberate v1 choice, not an implicit gap. It saves significant cost and setup complexity (one VPC, two instances, one kubeadm install) relative to genuinely isolated clusters per environment. The cost: no real environment isolation (a `prod` resource-exhaustion event can affect `dev`, and vice versa) and a single point of failure (the control-plane going down takes the cluster API out for every environment at once, including monitoring, and — since all application pods run on the sole worker node — the worker going down takes out every workload). Acceptable for a course project's scale and demo needs; a production deployment would put at least `prod` on isolated infrastructure with multiple worker nodes.
+**Stated tradeoff — two-node kubeadm cluster (one control-plane, one worker) shared by dev, prod, and monitoring:** running all three environments on one cluster is a deliberate v1 choice, not an implicit gap. It saves significant cost and setup complexity (one VPC, two instances, one kubeadm install) relative to genuinely isolated clusters per environment. The cost: no real environment isolation (a `prod` resource-exhaustion event can affect `dev`, and vice versa) and a single point of failure (the control-plane going down takes the cluster API out for every environment at once, including monitoring, and — since all application pods run on the sole worker node — the worker going down takes out every workload). The worker is also where ingress itself lives (§10's `hostNetwork: true` binds ingress-nginx to that specific node), so `dev.testscope.local`/`testscope.local` must resolve to the worker's IP, not the control-plane's — pointing DNS at the control-plane leaves nothing listening on 80/443 at all. Acceptable for a course project's scale and demo needs; a production deployment would put at least `prod` on isolated infrastructure with multiple worker nodes.
 
 ## 10. Kubernetes Design (kubeadm, two-node EC2 cluster)
 
@@ -177,7 +177,7 @@ Namespaces `dev`, `prod`, `monitoring`. Per env: `frontend`, `api`, `worker`, `m
 - **`mcp-test-analysis` volume:** `emptyDir` at `/workspace`, `sizeLimit: 2Gi`.
 - **Probes:** `api`/`frontend`/both MCP servers expose `/health/live`, `/health/ready`. `worker` runs a minimal embedded health endpoint (checks SQS reachability) for its own liveness/readiness probes, since its main loop isn't HTTP-driven.
 - **HPA:** `api` scales on CPU (min 1/max 3). `worker` scales on CPU as the MVP signal (metrics-server installed manually via its standard manifest, since kubeadm — unlike k3s — doesn't bundle one). True SQS-queue-depth-based scaling would need KEDA or a CloudWatch metrics adapter — documented as a post-MVP enhancement, not built now.
-- **Ingress:** nginx-ingress controller (`ingress-nginx`), host-based routing (`dev.testscope.local`, `testscope.local`) for the demo environment. The controller is patched to `hostNetwork: true` so it binds host ports 80/443 directly on the worker node — the baremetal `ingress-nginx` manifest defaults to a `NodePort` Service (a random high port), and unlike k3s's bundled Traefik there's no `ServiceLB`-style component to auto-bind 80/443 for it.
+- **Ingress:** nginx-ingress controller (`ingress-nginx`), host-based routing (`dev.testscope.local`, `testscope.local`) for the demo environment. The controller is patched to `hostNetwork: true` so it binds host ports 80/443 directly on the worker node — the baremetal `ingress-nginx` manifest defaults to a `NodePort` Service (a random high port), and unlike k3s's bundled Traefik there's no `ServiceLB`-style component to auto-bind 80/443 for it. Both demo hostnames must resolve to the **worker's** IP, not the control-plane's (§9). Because `hostNetwork: true` binds directly to the worker's own network namespace, only one process on that host can hold 80/443 at a time — nothing else in this design binds those ports there, but it's a real constraint if anything ever does.
 
 ## 11. CI/CD Pipeline (GitHub Actions)
 
