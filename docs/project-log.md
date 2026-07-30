@@ -19,9 +19,11 @@ Update this after each phase (or whenever something worth remembering happens).
 
 ## Current State
 
-**Phase:** 0 (complete, merged) → about to start Phase 1
-**Branch pattern in use:** `feature/phase-<N>-<short-description>`, one PR per phase
-**Last merged:** `fix/venv-isolation` → `main`
+**Phase:** 0 (complete, merged) → about to start Phase 1 (no Phase 1 code written yet)
+**Branch pattern in use:** `feature/phase-<N>-<short-description>`, one PR per phase (docs-only
+housekeeping like this entry uses `docs/<short-description>` instead)
+**Current branch:** `docs/project-log-update` (fresh off `main`, this update only)
+**Last merged:** `docs/claude-md` → `main` (PR #8)
 
 ---
 
@@ -59,12 +61,37 @@ Update this after each phase (or whenever something worth remembering happens).
   venv. Fixed via a separate small PR (`fix/venv-isolation`) — `.venv` now required, documented
   in README.
 
-### Phase 1 — [fill in title from plan.md] — not started
-- Tasks: [fill in task range]
-- Branch: [fill in once created]
+### Phase 1 — Custom MCP Server (`mcp-test-analysis`) — not started
+- Tasks: 2–8 (`extract_test_metadata` → `find_test_files`/`WorkspaceManager` →
+  `read_test_file` → `cleanup_workspace`/sweeper → `save_coverage_report` →
+  `get_previous_analysis` → server wiring/`FastMCP`/MCP integration test)
+- Branch: not yet created (will be `feature/phase-1-mcp-test-analysis` or similar per
+  the branch pattern above)
 
 ---
 
 ## Open Questions / Things to Revisit
 
-- (none yet)
+- **Correction to Phase 0's "process fix" entry above** (its literal wording is left as the
+  contemporaneous record; this is the verified follow-up, per CLAUDE.md's "don't trust the
+  log's claims if out of sync with the repo" rule). Re-checked by running `which python`,
+  `which python3`, `python3 -m pip show boto3`, and inspecting package locations directly:
+  1. **True system `dist-packages` was never touched.** `/usr/lib/python3/dist-packages`
+     has no `boto3`/`testscope-*` and no matching `dpkg` package — ruled out entirely.
+  2. **The real risk was PEP 668 not blocking user-site (`~/.local`) resolution.** This
+     machine's `EXTERNALLY-MANAGED` marker blocks bare system-wide `pip install`, but a
+     pre-existing personal toolkit already sits in `~/.local/lib/python3.12/site-packages`
+     (boto3, mcp, pydantic, httpx, paramiko, etc. — dated ~6 days before this repo's first
+     commit, unrelated to this project). Without an active `.venv`, a bare `python3`/`pip3`
+     command silently resolves against that unrelated, unpinned copy instead of erroring —
+     creating false confidence that "it's installed" when the project's own editable
+     packages aren't on the path at all.
+  3. **`.venv` correctly isolates the project.** Confirmed via `.venv/pyvenv.cfg`
+     (`include-system-site-packages = false`) and by checking package locations directly:
+     `.venv` has its own independent `boto3` (pulled in by `testscope-api`/`-worker`/
+     `-shared`/`-mcp`/`moto`), and all four `testscope-*` packages exist only inside
+     `.venv`, never in system or user site-packages.
+
+  Net: the `fix/venv-isolation` PR's outcome (require `.venv`, check `which python` first)
+  was the right call, just for this more precise reason — not "system Python pollution,"
+  but "silent fallback to an unrelated pre-existing toolkit masking a missing venv."
