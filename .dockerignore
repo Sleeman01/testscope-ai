@@ -1,0 +1,17 @@
+# .dockerignore — root-level, since every Dockerfile (Tasks 8, 17, 22, 26) builds with
+# repo-root context (`docker build -f <service>/Dockerfile .`, see Task 17's Dockerfile
+# header comment). Without this, every image build sends the whole working tree —
+# including .git history and any local /workspace clone scratch dirs — to the Docker
+# daemon as build context, which is slow and can leak local clutter into layers.
+.git/
+**/node_modules/
+**/__pycache__/
+**/*.pyc
+**/.pytest_cache/
+**/venv/
+**/.venv/
+**/dist/
+**/build/
+/workspace/
+*.pem
+.env
