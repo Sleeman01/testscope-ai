@@ -1,0 +1,8 @@
+{
+  "analysis_id": "a1", "repository": "acme/widgets", "issue_number": 42,
+  "status": "completed", "created_at": "2026-01-01T00:00:00Z", "updated_at": "2026-01-01T00:05:00Z",
+  "requirement_summary": "Login", "coverage_summary": {"percent_covered": 80.0},
+  "missing_tests_count": 1, "s3_report_key": "acme/widgets/42/a1.json",
+  "error_message": null, "storage_status": "saved", "tool_call_trace": [],
+  "github_issue_url": null, "user_feedback": null
+}
