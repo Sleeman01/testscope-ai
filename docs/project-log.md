@@ -68,7 +68,7 @@ starting Phase 3 (Task 11) or Task 22 must read that section first, not spec's o
   venv. Fixed via a separate small PR (`fix/venv-isolation`) — `.venv` now required, documented
   in README.
 
-### Phase 1 — Custom MCP Server (`mcp-test-analysis`) — in progress
+### Phase 1 — Custom MCP Server (`mcp-test-analysis`) — ✅ complete (Tasks 2–8)
 - Branch: `feature/phase-1-mcp-test-analysis-server`
 - **Tasks 2–7 ✅** (`extract_test_metadata` → `find_test_files`/`WorkspaceManager` →
   `read_test_file` → `cleanup_workspace`/sweeper → `save_coverage_report` →
