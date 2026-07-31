@@ -61,12 +61,58 @@ housekeeping like this entry uses `docs/<short-description>` instead)
   venv. Fixed via a separate small PR (`fix/venv-isolation`) — `.venv` now required, documented
   in README.
 
-### Phase 1 — Custom MCP Server (`mcp-test-analysis`) — not started
-- Tasks: 2–8 (`extract_test_metadata` → `find_test_files`/`WorkspaceManager` →
+### Phase 1 — Custom MCP Server (`mcp-test-analysis`) — in progress
+- Branch: `feature/phase-1-mcp-test-analysis-server`
+- **Tasks 2–7 ✅** (`extract_test_metadata` → `find_test_files`/`WorkspaceManager` →
   `read_test_file` → `cleanup_workspace`/sweeper → `save_coverage_report` →
-  `get_previous_analysis` → server wiring/`FastMCP`/MCP integration test)
-- Branch: not yet created (will be `feature/phase-1-mcp-test-analysis` or similar per
-  the branch pattern above)
+  `get_previous_analysis`), all TDD, full suite green after each task.
+  - **Deviation (Task 3):** `mcp-server/github_client.py` didn't exist as a Files-list
+    target with any shown content in Task 3's own steps, even though Task 8 called it
+    "created in Task 3 as an interface stub." Added a minimal stub (`GithubClient` class,
+    `get_repo_size_bytes` raising `NotImplementedError`) matching Task 8's eventual real
+    shape — approved.
+  - **Bug fix (Tasks 6 & 7):** `save_coverage_report`'s and `get_previous_analysis`'s test
+    fixture both passed a native Python `float` for `coverage_summary.percent_covered`
+    straight into `boto3`'s DynamoDB resource `put_item` — that API rejects floats outright
+    (`TypeError: Float types are not supported. Use Decimal types instead.`). Fixed by
+    wrapping in `Decimal` in both the implementation and the Task 7 fixture (pre-empted
+    before running, once the Task 6 failure was already confirmed).
+  - **Deviation (Task 6):** added the `mcp-server/tests/fixtures/sample_analysis_record.json`
+    fixture that Task 6's interfaces text promised (kept in sync with Task 9's
+    `backend/shared` copy) but that no step in Task 6 actually created — approved.
+- **Task 8 (server wiring, `github_client.py` real implementation, MCP integration test)
+  — major plan corrections found during live verification, all approved:**
+  - **mcp-github's real deployed image (`ghcr.io/github/github-mcp-server:latest`, `v1.8.0`)
+    exposes none of the tool names spec §5.2 assumed.** Verified against the live server
+    (default toolset and `--toolsets=all`, 54 tools checked): `get_repository`, `get_issue`,
+    `get_issue_comments`, `create_issue` do not exist under those names, in any toolset.
+    Full findings, substitute-tool table, and the standing architectural decision (issue
+    body fetch bypasses MCP via a direct GitHub REST call, since no MCP tool on this server
+    returns a single issue's body) are recorded in
+    `docs/2026-07-30-testscope-ai-design.md` §5.2 — read that before touching Task 11 or 22.
+    `mcp-server/github_client.py` itself only ever needed `get_repo_size_bytes` (its one
+    real caller, `find_test_files`); it has no issue-related methods — those belong to
+    Task 11's/22's separate, not-yet-built MCP clients.
+  - **Docker/auth setup also required correction:** the plain `docker run ... github-mcp-server`
+    invocation plan.md showed starts an **stdio** server, not HTTP — exits immediately when
+    run detached. Needs the `http --port 8100 --listen-host 0.0.0.0` subcommand. HTTP mode
+    also requires the token as an `Authorization: Bearer <token>` header per request; the
+    `GITHUB_PERSONAL_ACCESS_TOKEN` env var alone gets a 401.
+  - **Installed `mcp` Python SDK resolved to `2.0.0`** (plan.md's `pyproject.toml` only
+    pinned `mcp>=1.1`, an unpinned major-version jump that turned out to carry breaking
+    changes) — `mcp.server.fastmcp.FastMCP` doesn't exist in this version at all; it's
+    `mcp.server.MCPServer` (same `.tool()`/`.run()` pattern, but `.run(transport=...)`
+    needs explicit `host=`/`port=` kwargs). Client-side: `streamablehttp_client` →
+    `streamable_http_client` (now yields a 2-tuple, not 3), `Tool.inputSchema` →
+    `Tool.input_schema`, `CallToolResult.structuredContent` → `structured_content` (and is
+    `None` for external servers like mcp-github — payload comes back as JSON text in
+    `content[0].text` instead). All plan.md code snippets referencing these (Tasks 3, 8, 11,
+    17, 22, 39) were corrected in place; Tasks 11/14/19/22's *tool names* were left flagged
+    as stale rather than redesigned now, since those tasks aren't built yet.
+  - PAT used for verification was a disposable, read-only-scoped fine-grained token
+    (`Contents: read` + `Issues: read`), supplied via a scratchpad env file outside the repo
+    tree, referenced by `docker run --env-file`/`httpx` headers without ever being printed
+    to the transcript, and deleted immediately after verification completed.
 
 ---
 

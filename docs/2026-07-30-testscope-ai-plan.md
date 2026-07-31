@@ -14,7 +14,7 @@ Copied verbatim from `docs/2026-07-30-testscope-ai-design.md` — every task's r
 
 - **LLM:** Anthropic Claude API only. Model id is a single named constant (`ANTHROPIC_MODEL` env var, default `claude-sonnet-4-5-20250929`) in `backend/worker/app/config.py` — never hardcoded elsewhere.
 - **Test framework scope:** v1 analyzes Python/pytest tests only.
-- **Repo clone:** shallow (`--depth 1 --single-branch`), 30s subprocess timeout, reject repos >500MB before cloning (checked via GitHub MCP `get_repository`, size field is KB → convert to bytes).
+- **Repo clone:** shallow (`--depth 1 --single-branch`), 30s subprocess timeout, reject repos >500MB before cloning (checked via GitHub MCP `search_repositories` — not `get_repository`, which doesn't exist on the deployed server; see Task 8's verification and design.md §5.2 — size field is KB → convert to bytes).
 - **File reads:** `read_test_file` truncates at 50KB (`truncated=true`).
 - **File search cap:** `find_test_files` returns at most 30 ranked files.
 - **Workspace:** `/workspace/{analysis_id}` per job; explicit `cleanup_workspace` call in worker's `finally`; backstop sweeper deletes dirs older than 1 hour every 15 minutes.
@@ -504,7 +504,7 @@ async def find_test_files(analysis_id: str, clone_url: str, ref: str, keywords: 
     return {"files": scored[:MAX_FILES]}
 ```
 
-`github_client.get_repo_size_bytes` (real implementation, calling `mcp-github`'s `get_repository` tool over MCP) is built in Task 8 alongside server wiring; this task only needs it as an injected duck-typed dependency, proven here with a mock.
+`github_client.get_repo_size_bytes` (real implementation, calling `mcp-github` over MCP) is built in Task 8 alongside server wiring; this task only needs it as an injected duck-typed dependency, proven here with a mock. **Correction from Task 8's verification:** the real implementation does not call a `get_repository` tool — that tool doesn't exist on the deployed server. It calls `search_repositories` instead. See design.md §5.2 and Task 8 below.
 
 - [ ] **Step 7: Run test to verify it passes**
 
@@ -950,20 +950,31 @@ git commit -m "feat(mcp-server): add get_previous_analysis tool"
 - Produces: `server.py` exposes an MCP server over streamable-HTTP (env `MCP_HOST`, `MCP_PORT`, default `0.0.0.0:8100`) registering `find_test_files`, `read_test_file`, `extract_test_metadata`, `save_coverage_report`, `get_previous_analysis`, `cleanup_workspace` as `@mcp.tool()`-decorated tools with MCP-visible names matching spec §5.1 exactly — this is the contract the worker's MCP client (Task 11) calls by name.
 - Produces: `scripts/verify-github-mcp-tools.py` — a one-time, by-hand verification script (Step 1) confirming the *actual* deployed `github-mcp-server`'s tool names and response field names, run and confirmed **before** Task 11 is written. Task 11's `request_validator`/`requirement_retriever` and Task 22's `create_github_issue` all assume specific tool names (`get_repository`, `get_issue`, `get_issue_comments`, `create_issue`) and specific response fields (`default_branch`, `size`, `body`, `comments`, `html_url`) that spec §5.2 states but nothing has actually confirmed against a live server yet — this step is the confirmation, not the docstring comment the original version of this task shipped with (which was easy to skip and never blocked anything).
 
+  **RESULT — this assumption was wrong, not just approximately right.** Verified live against `ghcr.io/github/github-mcp-server:latest` (`v1.8.0`), default toolset and `--toolsets=all` (54 tools total): none of `get_repository`, `get_issue`, `get_issue_comments`, `create_issue` exist under those names in any toolset. See design.md §5.2 for the full table of what actually exists and the fit of each substitute, and for the standing decision that issue-body fetching bypasses MCP entirely (direct GitHub REST call) since no MCP tool on this server returns a single issue's body via direct lookup. Also confirmed live and requiring correction from the plan's original assumptions: the container must run in `http` subcommand mode (`... http --port 8100 --listen-host 0.0.0.0`; the bare invocation below starts a stdio server that exits immediately when run detached), auth is an `Authorization: Bearer <token>` header (the `GITHUB_PERSONAL_ACCESS_TOKEN` env var alone gets a 401 in HTTP mode), and the installed `mcp` SDK resolved to `2.0.0` (plan.md's `mcp>=1.1` pin was too loose), which renamed `streamablehttp_client`→`streamable_http_client` (now yielding a 2-tuple, not 3), `Tool.inputSchema`→`Tool.input_schema`, `CallToolResult.structuredContent`→`structured_content` (and left it `None` for this server — payload comes back as JSON text in `content[0].text` instead). The script and docker command below are shown corrected, reflecting what was actually run, not the original broken invocation.
+
 - [ ] **Step 1: Verify the deployed `github-mcp-server`'s real tool names and response shapes — REQUIRED, blocks Task 11**
 
 Run the real `mcp-github` image locally against a disposable/read-only-scoped GitHub token (fine-grained PAT, `Contents: read` + `Issues: read` is enough for this check — do **not** use a token with write access, since this script only needs to read, and Step 1c below deliberately doesn't call `create_issue` against a real repo):
 
 ```bash
-docker run -d --name mcp-github-verify -p 8101:8100 -e GITHUB_PERSONAL_ACCESS_TOKEN=<your-read-only-PAT> ghcr.io/github/github-mcp-server:latest
+# CORRECTED per Task 8's live verification — the bare image invocation starts a stdio
+# server (exits immediately when run with -d, since nothing is attached to stdin). The
+# `http` subcommand + explicit port/host flags are required to get an HTTP server at all.
+docker run -d --name mcp-github-verify -p 8101:8100 -e GITHUB_PERSONAL_ACCESS_TOKEN=<your-read-only-PAT> ghcr.io/github/github-mcp-server:latest http --port 8100 --listen-host 0.0.0.0
 ```
 
 ```python
-# scripts/verify-github-mcp-tools.py — run once by hand, not part of any automated test
+# scripts/verify-github-mcp-tools.py — run once by hand, not part of any automated test.
+# CORRECTED per Task 8's live verification (mcp SDK resolved to 2.0.0; see design.md §5.2
+# for the full renamed-API list). Also: HTTP mode requires the token as an Authorization:
+# Bearer header — the GITHUB_PERSONAL_ACCESS_TOKEN env var above is not read for request
+# auth in http mode, only used at container startup; the client must send it explicitly.
 import asyncio
 import json
+import os
+import httpx2
 from mcp import ClientSession
-from mcp.client.streamable_http import streamablehttp_client
+from mcp.client.streamable_http import streamable_http_client
 
 ASSUMED_TOOLS = {
     "get_repository": {"owner": "octocat", "repo": "Hello-World"},
@@ -972,7 +983,9 @@ ASSUMED_TOOLS = {
 }
 
 async def main():
-    async with streamablehttp_client("http://localhost:8101/mcp") as (read, write, _):
+    token = os.environ["GITHUB_PERSONAL_ACCESS_TOKEN"]
+    http_client = httpx2.AsyncClient(headers={"Authorization": f"Bearer {token}"})
+    async with streamable_http_client("http://localhost:8101/mcp", http_client=http_client) as (read, write):
         async with ClientSession(read, write) as session:
             await session.initialize()
 
@@ -985,7 +998,7 @@ async def main():
             for tool_name, args in ASSUMED_TOOLS.items():
                 result = await session.call_tool(tool_name, args)
                 print(f"\n{tool_name}({args}) ->")
-                print(json.dumps(result.structuredContent, indent=2))
+                print(json.dumps(result.structured_content, indent=2))
 
             # create_issue is deliberately NOT called here (it would create a real GitHub
             # issue) — instead, print its declared input schema so field names (e.g. does
@@ -993,7 +1006,7 @@ async def main():
             # for the installed image version without side effects.
             create_issue_tool = next(t for t in listed.tools if t.name == "create_issue")
             print("\ncreate_issue input schema:")
-            print(json.dumps(create_issue_tool.inputSchema, indent=2))
+            print(json.dumps(create_issue_tool.input_schema, indent=2))
 
 asyncio.run(main())
 ```
@@ -1007,49 +1020,70 @@ Expected — confirm, by reading the printed output, every one of these before w
 - `get_issue_comments`'s output contains a `comments` key (a list).
 - `create_issue`'s input schema accepts `owner`/`repo`/`title`/`body` and its description or the official `github-mcp-server` docs for the installed version confirms it returns `html_url` on success (Task 22 depends on this field name).
 
-**If any of these don't match:** update the constant/field name here in `github_client.py` *and* flag it in this task's commit message — Tasks 11 and 22 haven't been written yet at this point in the build order, so whoever writes them next reads this task's verified names instead of the spec's assumption. Do not proceed to Task 11 until this step's output has been read and confirmed, or until any mismatches have been recorded here.
+**ACTUAL RESULT (all four `MISSING`, not `FOUND` — this is the confirmation the step above was designed to produce):** none of these four tools exist, in any toolset. Full findings, substitute tools, and the standing REST-fallback decision for issue body are in design.md §5.2. Recorded here per this step's own instruction to flag any mismatch in this task's commit message and record it for whoever writes Task 11/22 next:
+- `get_repository` → **no equivalent.** Use `search_repositories` (`query: "repo:{owner}/{repo}"`, `minimal_output: false`) → `items[0].default_branch` / `.size`. It's a search endpoint, not a direct lookup.
+- `get_issue` → **no equivalent that returns `body`.** `issue_read(method="get")` exists but never returns body, confirmed against a real issue. Task 11 must fetch the body via direct GitHub REST call instead (design.md §5.2), not through `mcp-github`.
+- `get_issue_comments` → `issue_read(method="get_comments")`. Confirmed working.
+- `create_issue` → `issue_write(method="create")`. Schema confirmed (`owner`/`repo`/`title`/`body`/`labels`/etc. required: `method`/`owner`/`repo`); not called, so its success response shape (in particular `html_url`) is **still unconfirmed** — Task 22 must verify this for real before shipping, either by calling it against a disposable test repo or checking the installed image's docs for the exact version deployed at that time.
 
 ```bash
 docker rm -f mcp-github-verify
 ```
 
-- [ ] **Step 2: Implement `github_client.py`'s real `get_repo_size_bytes`, using the tool name confirmed in Step 1**
+- [ ] **Step 2: Implement `github_client.py`'s real `get_repo_size_bytes`, using the tool confirmed in Step 1**
+
+**CORRECTED per Step 1's live findings:** `get_repository` doesn't exist; `search_repositories` is the confirmed substitute. This is `mcp-server/github_client.py`'s *only* method — it has no issue-related methods. Issue body/comments/creation belong to `backend/worker/app/mcp_clients.py` (Task 11) and `backend/api/app/mcp_client.py` (Task 22), independently implemented per design.md §5.2, not built yet as of this task.
 
 ```python
 # mcp-server/github_client.py
+import json
 import os
+import httpx2
 from mcp import ClientSession
-from mcp.client.streamable_http import streamablehttp_client
+from mcp.client.streamable_http import streamable_http_client
 
 class GithubClient:
     """Thin MCP client this server uses to call the separately-deployed mcp-github server.
 
     TOOL_NAME confirmed against the real deployed github-mcp-server in this task's Step 1 —
-    not an untested assumption. If the installed image's tool name ever changes, re-run
-    scripts/verify-github-mcp-tools.py and update this constant.
+    get_repository does not exist on the deployed server (v1.8.0); search_repositories is
+    the confirmed substitute (see design.md §5.2). If the installed image's tool set ever
+    changes, re-run scripts/verify-github-mcp-tools.py and update this constant.
     """
-    TOOL_NAME = "get_repository"
+    TOOL_NAME = "search_repositories"
 
-    def __init__(self, base_url: str | None = None):
+    def __init__(self, base_url: str | None = None, github_token: str | None = None):
         self.base_url = base_url or os.environ["MCP_GITHUB_URL"]
+        self.github_token = github_token or os.environ["GITHUB_TOKEN"]
 
     async def get_repo_size_bytes(self, owner: str, repo: str) -> int:
-        async with streamablehttp_client(self.base_url) as (read, write, _):
+        http_client = httpx2.AsyncClient(headers={"Authorization": f"Bearer {self.github_token}"})
+        async with streamable_http_client(self.base_url, http_client=http_client) as (read, write):
             async with ClientSession(read, write) as session:
                 await session.initialize()
-                result = await session.call_tool(self.TOOL_NAME, {"owner": owner, "repo": repo})
-                size_kb = result.structuredContent["size"]
+                result = await session.call_tool(self.TOOL_NAME, {
+                    "query": f"repo:{owner}/{repo}", "minimal_output": False,
+                })
+                # This server leaves structured_content as None; payload is JSON text
+                # in content[0].text instead (confirmed in Step 1, design.md §5.2).
+                text = next(b.text for b in result.content if getattr(b, "text", None))
+                items = json.loads(text).get("items", [])
+                if not items:
+                    raise ValueError(f"search_repositories found no match for {owner}/{repo}")
+                size_kb = items[0]["size"]
                 return size_kb * 1024
 ```
 
 - [ ] **Step 3: Implement `server.py` registering all six tools**
+
+**CORRECTED per the installed mcp 2.0.0 SDK:** `mcp.server.fastmcp.FastMCP` doesn't exist in this version at all — it's `mcp.server.MCPServer`. Same `@mcp.tool()`/`.run()` pattern, but `.run(transport="streamable-http")` doesn't read `MCP_HOST`/`MCP_PORT` itself — pass `host=`/`port=` explicitly as kwargs. See design.md §5.2.
 
 ```python
 # mcp-server/server.py
 import asyncio
 import os
 from pathlib import Path
-from mcp.server.fastmcp import FastMCP
+from mcp.server import MCPServer
 
 from tools.find_test_files import find_test_files as _find_test_files
 from tools.read_test_file import read_test_file as _read_test_file
@@ -1060,7 +1094,7 @@ from tools.cleanup_workspace import cleanup_workspace as _cleanup_workspace
 from github_client import GithubClient
 from sweeper import start_sweeper
 
-mcp = FastMCP("testscope-test-analysis")
+mcp = MCPServer("testscope-test-analysis")
 _github_client = GithubClient()
 WORKSPACE_ROOT = Path(os.environ.get("WORKSPACE_ROOT", "/workspace"))
 
@@ -1096,21 +1130,36 @@ def cleanup_workspace(analysis_id: str) -> dict:
 
 if __name__ == "__main__":
     start_sweeper(WORKSPACE_ROOT, interval_seconds=900, max_age_seconds=3600)
-    mcp.run(transport="streamable-http")
+    mcp.run(
+        transport="streamable-http",
+        host=os.environ.get("MCP_HOST", "0.0.0.0"),
+        port=int(os.environ.get("MCP_PORT", "8100")),
+    )
 ```
 
 - [ ] **Step 4: Write the failing MCP integration test (real transport, local fixture repo, no network)**
 
+**CORRECTED for the mcp 2.0.0 SDK** (design.md §5.2): `streamablehttp_client`→`streamable_http_client` (2-tuple). Also two findings only surfaced by actually running this test, not visible from the API renames alone:
+- **Subprocess startup latency:** the plan's original `time.sleep(1.0)` isn't enough — measured ~5-6s for the subprocess to actually bind its port in this environment (heavier imports: boto3, GitPython, the mcp/uvicorn/starlette stack). Bumped to `8.0`. If this ever flakes in CI, prefer polling for the port to open over a longer fixed sleep.
+- **`structured_content` is `None` for these tools too, not just the external `github-mcp-server`'s** — confirmed general SDK behavior for any `-> dict`-annotated tool (no schema to auto-populate structured output from), not an external-server quirk. Added a `_payload()` helper that falls back to parsing `content[0].text` as JSON, same pattern as `github_client.py`.
+
 ```python
-# mcp-server/tests/test_mcp_integration.py
+# mcp-server/tests/test_mcp_integration.py — CORRECTED for mcp 2.0.0's renamed APIs (design.md §5.2)
+import json
 import subprocess
 import sys
 import time
 from pathlib import Path
 import pytest
 from mcp import ClientSession
-from mcp.client.streamable_http import streamablehttp_client
+from mcp.client.streamable_http import streamable_http_client
 from tests.fixtures.make_bare_repo import make_bare_repo
+
+def _payload(result):
+    if result.structured_content is not None:
+        return result.structured_content
+    text = next(b.text for b in result.content if getattr(b, "text", None))
+    return json.loads(text)
 
 @pytest.mark.asyncio
 async def test_find_and_extract_over_real_mcp_transport(tmp_path, monkeypatch):
@@ -1129,24 +1178,24 @@ async def test_find_and_extract_over_real_mcp_transport(tmp_path, monkeypatch):
         cwd=str(Path(__file__).parent.parent),
     )
     try:
-        time.sleep(1.0)
+        time.sleep(8.0)
         workspace = tmp_path / "workspace_root" / "int-test-1"
         workspace.mkdir(parents=True)
         (workspace / "test_login.py").write_text(
             "def test_login_rejects_invalid_password():\n    assert True\n"
         )
-        async with streamablehttp_client("http://localhost:8199/mcp") as (read, write, _):
+        async with streamable_http_client("http://localhost:8199/mcp") as (read, write):
             async with ClientSession(read, write) as session:
                 await session.initialize()
                 read_result = await session.call_tool("read_test_file", {"analysis_id": "int-test-1", "path": "test_login.py"})
-                assert "test_login_rejects_invalid_password" in read_result.structuredContent["content"]
+                assert "test_login_rejects_invalid_password" in _payload(read_result)["content"]
 
                 meta_result = await session.call_tool("extract_test_metadata", {"analysis_id": "int-test-1", "path": "test_login.py"})
-                names = [t["name"] for t in meta_result.structuredContent["tests"]]
+                names = [t["name"] for t in _payload(meta_result)["tests"]]
                 assert "test_login_rejects_invalid_password" in names
 
                 cleanup_result = await session.call_tool("cleanup_workspace", {"analysis_id": "int-test-1"})
-                assert cleanup_result.structuredContent["deleted"] is True
+                assert _payload(cleanup_result)["deleted"] is True
     finally:
         proc.terminate()
         proc.wait(timeout=5)
@@ -1851,10 +1900,12 @@ Expected: FAIL — `ModuleNotFoundError`
 
 - [ ] **Step 8: Implement `mcp_clients.py` and both nodes**
 
+**CORRECTED for the mcp 2.0.0 SDK actually installed (design.md §5.2 — plan.md's original `mcp>=1.1` pin was too loose):** `streamablehttp_client`→`streamable_http_client`, 2-tuple not 3, `.structuredContent`→`.structured_content`. **Tool names below (`get_repository`/`get_issue`/`get_issue_comments`) are STALE** — Task 8's live verification (design.md §5.2) found none of them exist on the deployed `mcp-github` server. Whoever implements this task for real must first re-read design.md §5.2's substitute-tool table and the REST-fallback decision for issue body, and redesign `request_validator`/`requirement_retriever` accordingly — this snippet is left showing the plan's original (now known-wrong) tool names deliberately, rather than guessing a fix for logic that hasn't been built or tested yet.
+
 ```python
 # backend/worker/app/mcp_clients.py
 from mcp import ClientSession
-from mcp.client.streamable_http import streamablehttp_client
+from mcp.client.streamable_http import streamable_http_client
 from config import get_settings
 from retry import with_retry
 
@@ -1865,11 +1916,11 @@ def _is_retryable_tool_error(exc: Exception) -> bool:
     return not any(marker in message for marker in TERMINAL_MARKERS)
 
 async def _call_once(base_url: str, tool_name: str, kwargs: dict) -> dict:
-    async with streamablehttp_client(base_url) as (read, write, _):
+    async with streamable_http_client(base_url) as (read, write):
         async with ClientSession(read, write) as session:
             await session.initialize()
             result = await session.call_tool(tool_name, kwargs)
-            return result.structuredContent
+            return result.structured_content
 
 async def _call(base_url: str, tool_name: str, **kwargs) -> dict:
     return await with_retry(
@@ -1885,7 +1936,10 @@ async def call_test_mcp_tool(tool_name: str, **kwargs) -> dict:
 ```
 
 ```python
-# backend/worker/app/nodes/request_validator.py
+# backend/worker/app/nodes/request_validator.py — "get_repository" below is STALE,
+# confirmed not to exist by Task 8 (design.md §5.2). Real implementation needs
+# search_repositories (query: f"repo:{owner}/{repo}", minimal_output: False) and must
+# handle the zero-items case as "not found" instead of relying on a tool-level 404.
 from app.mcp_clients import call_github_tool
 
 async def request_validator(state: dict) -> dict:
@@ -1901,7 +1955,12 @@ async def request_validator(state: dict) -> dict:
 ```
 
 ```python
-# backend/worker/app/nodes/requirement_retriever.py
+# backend/worker/app/nodes/requirement_retriever.py — "get_issue" below is STALE and,
+# unlike get_repository, has no MCP substitute at all: Task 8 confirmed issue_read
+# (the closest tool) never returns the issue body, even for real populated issues.
+# Real implementation must fetch the body via a direct GitHub REST call instead
+# (design.md §5.2's standing decision), not through call_github_tool/mcp-github.
+# get_issue_comments is fine to correct mechanically: issue_read(method="get_comments").
 from app.mcp_clients import call_github_tool
 
 async def requirement_retriever(state: dict) -> dict:
@@ -2790,6 +2849,9 @@ async def test_full_pipeline_reaches_completed_status(full_env):
     async def fake_call_llm(system_prompt, user_prompt, response_model, tool_name):
         return response_model.model_validate(stub_llm_by_tool[tool_name])
 
+    # Tool names below are STALE placeholders (Task 8, design.md §5.2, found none of them
+    # exist on the real server) — harmless here since call_github_tool itself is mocked,
+    # but rename to match Task 11's actual implementation once that task is built for real.
     async def fake_call_github_tool(tool_name, **kwargs):
         if tool_name == "get_repository":
             return {"default_branch": "main"}
@@ -3346,22 +3408,26 @@ Expected: FAIL — `404` route not found
 
 - [ ] **Step 3: Implement**
 
+**CORRECTED for mcp 2.0.0 (design.md §5.2):** `streamablehttp_client`→`streamable_http_client` (2-tuple), `.structuredContent`→`.structured_content`. `create_issue` below is STALE — Task 8 confirmed it doesn't exist; `issue_write(method="create")` is the substitute, schema confirmed, but its **success response shape is unverified** (not called during Task 8's verification, to avoid creating a real issue) — confirm it actually returns `html_url` before shipping this task, don't assume the snippet below is correct as-is.
+
 ```python
 # backend/api/app/mcp_client.py
 from mcp import ClientSession
-from mcp.client.streamable_http import streamablehttp_client
+from mcp.client.streamable_http import streamable_http_client
 from config import get_settings
 
 async def call_github_tool(tool_name: str, **kwargs) -> dict:
-    async with streamablehttp_client(get_settings().mcp_github_url) as (read, write, _):
+    async with streamable_http_client(get_settings().mcp_github_url) as (read, write):
         async with ClientSession(read, write) as session:
             await session.initialize()
             result = await session.call_tool(tool_name, kwargs)
-            return result.structuredContent
+            return result.structured_content
 ```
 
 ```python
-# backend/api/app/routes/analyses.py — append
+# backend/api/app/routes/analyses.py — append. "create_issue" below is STALE (see note
+# above) — real implementation calls issue_write(method="create", ...) and must verify
+# the response actually contains html_url before trusting result["html_url"] below.
 from app.mcp_client import call_github_tool
 from app.schemas import GithubIssueResponse
 
@@ -4872,7 +4938,7 @@ spec:
 
 `mcp-github` uses its **own** `github-token` Secret instance (per-namespace, created independently of `mcp-test-analysis`'s) — both reference the same Secret *name* for manifest simplicity, but each namespace's overlay (Task 35) supplies its own Secret value; this still satisfies spec §5.1's "own K8s Secret" requirement since it's not shared across namespaces or read by `worker`/`api`.
 
-**Note:** verify the exact tool names/parameters against the installed `github-mcp-server` version's tool list (e.g. `docker run ghcr.io/github/github-mcp-server --help` or its README) before wiring Task 11/22's `get_repository`/`get_issue`/`get_issue_comments`/`create_issue` calls against a real deployment — this plan assumes those names per spec §5.2 but the upstream project's exact naming should be confirmed once, in this task, and any mismatch fixed in the two call sites (`backend/worker/app/mcp_clients.py`, `backend/api/app/mcp_client.py`) plus `mcp-server/github_client.py`.
+**Note (superseded — this verification already happened in Task 8, don't repeat it here):** Task 8 confirmed the real tool names/parameters against the deployed `github-mcp-server` (`v1.8.0`) — `get_repository`/`get_issue`/`get_issue_comments`/`create_issue` do not exist under those names at all. Full findings and substitutes are in design.md §5.2. When Task 11/22 are actually implemented, fix their call sites (`backend/worker/app/mcp_clients.py`, `backend/api/app/mcp_client.py`) against that table — `mcp-server/github_client.py` needed no issue-related methods and was already implemented correctly in Task 8 (it only ever called `search_repositories`, not `get_repository`).
 
 - [ ] **Step 3: Update `kustomization.yaml` and validate**
 
@@ -5500,6 +5566,8 @@ ANALYSIS_COUNT.labels(status=state["status"]).inc()
 
 ```python
 # backend/worker/app/mcp_clients.py — wrap _call with latency/count metrics (extend Task 11's implementation)
+# CORRECTED for mcp 2.0.0 (design.md §5.2): streamablehttp_client -> streamable_http_client
+# (2-tuple), .structuredContent -> .structured_content.
 import time
 from metrics import MCP_TOOL_CALL_COUNT, MCP_TOOL_LATENCY
 
@@ -5507,11 +5575,11 @@ async def _call(base_url: str, tool_name: str, **kwargs) -> dict:
     start = time.time()
     status = "success"
     try:
-        async with streamablehttp_client(base_url) as (read, write, _):
+        async with streamable_http_client(base_url) as (read, write):
             async with ClientSession(read, write) as session:
                 await session.initialize()
                 result = await session.call_tool(tool_name, kwargs)
-                return result.structuredContent
+                return result.structured_content
     except Exception:
         status = "error"
         raise
