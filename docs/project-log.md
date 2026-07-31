@@ -19,11 +19,18 @@ Update this after each phase (or whenever something worth remembering happens).
 
 ## Current State
 
-**Phase:** 0 (complete, merged) → about to start Phase 1 (no Phase 1 code written yet)
+**Phase:** 0 (complete, merged) → 1 (Tasks 2–8 all complete, not yet merged) → Phase 2
+(`backend/shared`, Task 9) not started
 **Branch pattern in use:** `feature/phase-<N>-<short-description>`, one PR per phase (docs-only
 housekeeping like this entry uses `docs/<short-description>` instead)
-**Current branch:** `docs/project-log-update` (fresh off `main`, this update only)
+**Current branch:** `feature/phase-1-mcp-test-analysis-server` (not yet merged to `main`)
 **Last merged:** `docs/claude-md` → `main` (PR #8)
+**mcp-server test suite:** 17/17 passing, 90% coverage (`--cov=. --cov-report=term-missing`
+from `mcp-server/`), comfortably above the 80% target.
+**Read before starting Task 9:** `docs/2026-07-30-testscope-ai-design.md` §5.2 — the GitHub
+MCP tool-name assumptions there were found wrong during Task 8's live verification (see
+Phase 1 entry below); Task 9 itself is unaffected (no GitHub MCP calls), but anyone
+starting Phase 3 (Task 11) or Task 22 must read that section first, not spec's original text.
 
 ---
 
@@ -80,8 +87,9 @@ housekeeping like this entry uses `docs/<short-description>` instead)
   - **Deviation (Task 6):** added the `mcp-server/tests/fixtures/sample_analysis_record.json`
     fixture that Task 6's interfaces text promised (kept in sync with Task 9's
     `backend/shared` copy) but that no step in Task 6 actually created — approved.
-- **Task 8 (server wiring, `github_client.py` real implementation, MCP integration test)
-  — major plan corrections found during live verification, all approved:**
+- **Task 8 ✅ (server wiring, `github_client.py` real implementation, MCP integration test)
+  — major plan corrections found during live verification, all approved. Phase 1
+  (Tasks 2–8) is now fully complete:**
   - **mcp-github's real deployed image (`ghcr.io/github/github-mcp-server:latest`, `v1.8.0`)
     exposes none of the tool names spec §5.2 assumed.** Verified against the live server
     (default toolset and `--toolsets=all`, 54 tools checked): `get_repository`, `get_issue`,
@@ -104,14 +112,27 @@ housekeeping like this entry uses `docs/<short-description>` instead)
     `mcp.server.MCPServer` (same `.tool()`/`.run()` pattern, but `.run(transport=...)`
     needs explicit `host=`/`port=` kwargs). Client-side: `streamablehttp_client` →
     `streamable_http_client` (now yields a 2-tuple, not 3), `Tool.inputSchema` →
-    `Tool.input_schema`, `CallToolResult.structuredContent` → `structured_content` (and is
-    `None` for external servers like mcp-github — payload comes back as JSON text in
-    `content[0].text` instead). All plan.md code snippets referencing these (Tasks 3, 8, 11,
-    17, 22, 39) were corrected in place; Tasks 11/14/19/22's *tool names* were left flagged
-    as stale rather than redesigned now, since those tasks aren't built yet.
+    `Tool.input_schema`, `CallToolResult.structuredContent` → `structured_content`.
+    **`structured_content` is `None` for any `-> dict`-annotated tool** — confirmed for
+    *both* `mcp-github`'s tools and `mcp-server`'s own (all `-> dict`); it's general SDK
+    behavior (no schema to derive structured output from), not an external-server quirk as
+    first assumed — payload comes back as JSON text in `content[0].text` instead, parsed by
+    a small `_payload()`/inline helper everywhere it's needed. All plan.md code snippets
+    referencing these (Tasks 3, 8, 11, 17, 22, 39) were corrected in place; Tasks 11/14/19/22's
+    *tool names* were left flagged as stale rather than redesigned now, since those tasks
+    aren't built yet.
+  - **Two more findings only surfaced by actually running the integration test, not from
+    API docs alone:** the test subprocess's real startup latency (heavier imports — boto3,
+    GitPython, the mcp/uvicorn/starlette stack) measured ~5-6s in this environment, not the
+    plan's original `time.sleep(1.0)` — bumped to `8.0`. And `github_client.py`'s real
+    `search_repositories`-parsing logic had **zero test coverage** — Task 3's `find_test_files`
+    test mocks the GitHub client entirely, and the integration test can't hit a live GitHub
+    server by design (hermetic/offline CI) — so nothing in the original plan actually
+    exercised the new code. Added `mcp-server/tests/test_github_client.py` (mocks the MCP
+    transport boundary) to close the gap; suite went from 85%→90% overall.
   - PAT used for verification was a disposable, read-only-scoped fine-grained token
     (`Contents: read` + `Issues: read`), supplied via a scratchpad env file outside the repo
-    tree, referenced by `docker run --env-file`/`httpx` headers without ever being printed
+    tree, referenced by `docker run --env-file`/`httpx2` headers without ever being printed
     to the transcript, and deleted immediately after verification completed.
 
 ---
