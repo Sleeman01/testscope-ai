@@ -25,8 +25,8 @@ complete, not yet merged
 **Branch pattern in use:** `feature/phase-<N>-<short-description>`, one PR per phase (docs-only
 housekeeping like this entry uses `docs/<short-description>` instead)
 **Current branch:** `feature/phase-3-backend-worker` (cut from `main` after Phase 2's merge;
-not yet merged). Tasks 10, 11, and 12 done on this branch — do NOT start Task 13 without the
-user's explicit go-ahead (Phase 3 has 8 tasks total, Task 10 through Task 17).
+not yet merged). Tasks 10–13 done on this branch — do NOT start Task 14 without the user's
+explicit go-ahead (Phase 3 has 8 tasks total, Task 10 through Task 17).
 **Last merged:** Phase 2 (Task 9, `backend/shared`) → `main`.
 **mcp-server test suite:** 17/17 passing, 90% coverage (`--cov=. --cov-report=term-missing`
 from `mcp-server/`), comfortably above the 80% target.
@@ -34,12 +34,16 @@ from `mcp-server/`), comfortably above the 80% target.
 from `backend/shared/`). Re-verified after Task 10's `pyproject.toml` fix (see Phase 3 entry
 below) — still 12/12, 100%; re-verified again via a fresh uninstall/reinstall from outside
 `backend/shared` before starting Task 11 (see Phase 3 entry below).
-**backend/worker test suite (Tasks 10–12):** 20/20 passing, 85% overall coverage
-(`--cov=. --cov-report=term-missing` from `backend/worker/`) — every Task 10/11/12 node/client
+**backend/worker test suite (Tasks 10–13):** 26/26 passing, 88% overall coverage
+(`--cov=. --cov-report=term-missing` from `backend/worker/`) — every Task 10/11/12/13 node/client
 file at 100% except `app/health.py`/`app/main.py`/`app/state.py` (Task 10, deferred to Task 17
 per the plan's own text) and `app/llm_client.py` (Task 12, deferred to the Task 17/E2E stub-LLM
 test per the plan's own text — "no dedicated `llm_client` test needed"); not a regression
 against the 80% CI gate (Task 36, not yet built) once those four files are excluded.
+**`backend/worker/pyproject.toml` now has `[tool.pytest.ini_options] testpaths = ["tests"]`**
+(added in Task 13, see entry below) — anyone adding a new `app/nodes/*.py` file in a future
+task should check whether its name collides with pytest's `test_*` discovery glob before
+assuming a bare `python -m pytest` run from `backend/worker/` behaves as expected.
 **Read before starting Task 12+:** `docs/2026-07-30-testscope-ai-design.md` §5.2 — the GitHub
 MCP tool-name assumptions there were found wrong during Task 8's live verification (see Phase 1
 entry below); Task 11 (Phase 3 entry below) already redesigned `request_validator`/
@@ -301,6 +305,36 @@ no further §5.2 rework needed at the client layer, only new tool names per node
   returning canned JSON, not live Claude calls, wired in Task 17) — not an accidental gap like
   Task 11's `_call_once`/`_fetch_issue_body`, which the plan's own snippets left untested without
   saying so.
+- **Task 13 (Test Search Planner, Test File Retriever, Test File Classifier nodes) ✅.** Verified
+  `find_test_files`/`extract_test_metadata`'s real return shapes (`{"files": [...]}`,
+  `{"tests": [...]}`) against `mcp-server`'s actual Phase 1 implementation before
+  implementing — this is this project's own MCP server (not the external `mcp-github` server
+  Task 11 had staleness problems with), and matched the plan's assumptions exactly, so all
+  three nodes implemented verbatim from plan.md.
+- **Real blocker found and fixed, not flagged anywhere in plan.md:** Task 13 is the first task
+  whose node function names (`test_search_planner`, `test_file_retriever`, `test_file_classifier`
+  — required by plan.md's own file list, e.g. `app/nodes/test_search_planner.py`) collide with
+  pytest's default `test_*` discovery convention. Two distinct breakages, both found by actually
+  running the suite, not by inspection:
+  1. `python -m pytest` run from `backend/worker/` (every "Run:" instruction in the plan does
+     this) recursively globs the whole tree by default, so it tried to collect
+     `app/nodes/test_search_planner.py` etc. as test *modules* too. Fixed by adding
+     `[tool.pytest.ini_options]\ntestpaths = ["tests"]` to `backend/worker/pyproject.toml`
+     (no other package in this repo needed this, since none of their node/tool files happen to
+     start with `test_`).
+  2. Independently, `testpaths` alone didn't fix it: each new test file does
+     `from app.nodes.test_search_planner import test_search_planner` — importing the node
+     function pulls a `test_`-named callable directly into the test module's own namespace,
+     and pytest collects it there too (regardless of `testpaths`), failing at setup because it
+     expects a `state` fixture pytest can't resolve. Fixed with the standard pytest idiom
+     (`test_search_planner.__test__ = False` etc., right after each import) rather than
+     renaming anything plan.md specifies — preserves the plan's literal file/function names
+     exactly, adds one non-behavioral line per test file.
+  Full worker suite re-run clean after both fixes: 26/26 passing, all three new node files at
+  100% coverage.
+- `ruff check .` on the three new node files reports the same `I001`/`BLE001` categories already
+  established as "leave as-is, verbatim from plan.md" precedent in Tasks 10/11 — no new
+  categories introduced.
 
 ---
 
