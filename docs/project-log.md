@@ -22,10 +22,10 @@ Update this after each phase (or whenever something worth remembering happens).
 **Phase:** 0 (complete, merged) → 1 (Tasks 2–8, complete, merged to `main`) → 2
 (`backend/shared`, Task 9, complete, merged to `main`) → 3 (`backend/worker`, Tasks 10–17,
 complete, merged to `main` via PR #12) → 4 (`backend/api`, Tasks 18–22, complete, merged to
-`main` via PR #13) → 5 (`frontend`, Tasks 23–26) — **Tasks 23 (API client, routing, page stubs)
-and 24 (Home page) complete on `feature/phase-5-frontend`. Tasks 25–26 not yet started. A
-pre-existing, unaddressed plan gap (no task ever creates `frontend/index.html`, so `vite build`
-fails) was found while verifying Task 23's `@types/react` install — see "Open Questions" below.**
+`main` via PR #13) → 5 (`frontend`, Tasks 23–26) — **Tasks 23 (API client, routing, page stubs),
+24 (Home page), and 25 (Results page) complete on `feature/phase-5-frontend`. Task 26 not yet
+started. `frontend/index.html` (a plan gap — no task created it) was added out-of-band per the
+user's decision; `npm run build` is now fully green end-to-end.**
 **Branch pattern in use:** `feature/phase-<N>-<short-description>`, one PR per phase (docs-only
 housekeeping like this entry uses `docs/<short-description>` instead)
 **Current branch:** `feature/phase-5-frontend` (cut fresh from `main` after confirming PR #13
@@ -47,11 +47,11 @@ main` looked like Phase 3 was still unmerged until `git fetch origin main` + `gi
 Flagging per CLAUDE.md's "don't rely solely on the log's claims" rule — this wasn't the log
 being wrong, it was the local clone being stale, but the same verify-before-trusting principle
 applied.
-**frontend test suite (Tasks 23–24):** 4/4 passing (`npm test` from `frontend/`, Vitest) — the
-pre-existing smoke test, 2 `client.test.ts` cases, and 1 `Home.test.tsx` case. `tsc -b` passes
-cleanly (post-`@types/react` install); `vite build` still blocked by the missing-`index.html`
-gap noted above. Repo-wide regression check: `backend/worker` 38/38, `backend/shared` 12/12,
-`backend/api` 16/16, `mcp-server` 17/17 — all unchanged from Phase 4's baseline.
+**frontend test suite (Tasks 23–25):** 5/5 passing (`npm test` from `frontend/`, Vitest) — the
+pre-existing smoke test, 2 `client.test.ts` cases, 1 `Home.test.tsx` case, and 1
+`Results.test.tsx` case. `npm run build` (`tsc -b && vite build`) is now fully green end-to-end.
+Repo-wide regression check: `backend/worker` 38/38, `backend/shared` 12/12, `backend/api` 16/16,
+`mcp-server` 17/17 — all unchanged from Phase 4's baseline.
 **mcp-server test suite:** 17/17 passing, 90% coverage (`--cov=. --cov-report=term-missing`
 from `mcp-server/`), comfortably above the 80% target.
 **backend/shared test suite (Task 9):** 12/12 passing, 100% coverage (`--cov=. --cov-report=term-missing`
@@ -1104,6 +1104,51 @@ the same reasoning Phase 3's own health-check recommendation gave.
     `backend/worker` 38/38, `backend/shared` 12/12, `backend/api` 16/16, `mcp-server` 17/17 — all
     unchanged.
   - No credential/secret handling, no new dependencies.
+- **RESOLVED, decision made by the user: `frontend/index.html` added now, out-of-band, same class
+  of fix as the Task 10/20/22 precedents.** Before creating it, verified (per the user's explicit
+  ask) rather than assumed:
+  1. Grepped the *entire* plan for `index.html` — appears exactly once, in Task 34's
+     `frontend/nginx.conf` (`try_files $uri /index.html`), which **serves** the file, not creates
+     it. Confirmed directly that neither Task 34 nor Task 43 (nor any other task) ever creates
+     `frontend/index.html`.
+  2. Confirmed the real entry module path and mount target from the actual repo content, not
+     assumed: `frontend/src/main.tsx` (the only `main.ts*`/`index.ts*` candidate in `src/`) calls
+     `document.getElementById("root")`.
+  3. Created a minimal `frontend/index.html`: doctype, `charset`/`viewport` meta, a plain title,
+     `<div id="root">`, and `<script type="module" src="/src/main.tsx">` — nothing beyond that, no
+     scope creep.
+  4. Verified it actually unblocks both: `npm run build` now produces a real `dist/index.html` +
+     bundled JS (previously failed at `Could not resolve entry module "index.html"`); `npm run dev`
+     booted, served `HTTP 200` at `localhost:5173`, and was stopped cleanly afterward.
+- **Task 25 (Results page — polling, coverage matrix, actions) ✅**, implemented verbatim from
+  plan.md's `Results.tsx` snippet — no deviations there.
+  - **Real, empirically-confirmed plan bug found via the mandatory RED-verification step (the
+    fourth plan-snippet bug found this project — see Task 23's `options?`/`expect.anything()`
+    mismatch above, and Tasks 14/20 in Phase 3/4 for the first two):**
+    `@testing-library/jest-dom` has been a `devDependency` since Task 1 (and its type declarations
+    are in `tsconfig.json`'s `types` array), but **no task, anywhere, ever actually wires it up** —
+    no `setupFiles` entry, no import for its `expect.extend` side effect. Confirmed via a second
+    whole-plan grep (`setupFiles`/`jest-dom`): the only hit is Task 1's own devDependency list
+    line. This stayed invisible through Tasks 23–24 because neither of their tests used a
+    jest-dom-specific matcher (`toBe`/`toHaveBeenCalledWith`/RTL's own queries are enough) — Task
+    25's own literal test snippet is the first to call `toBeInTheDocument()`, and running it
+    exactly as written failed with `Invalid Chai property: toBeInTheDocument`, even though the
+    rendered DOM was already fully correct (confirmed by inspecting the test's own debug output —
+    every expected string was present, the matcher itself just didn't exist). **Fix:** added
+    `frontend/src/setupTests.ts` (one line: `import "@testing-library/jest-dom/vitest"` — the
+    already-installed package's own Vitest-specific auto-extend subpath, not a new dependency) and
+    wired it into `vitest.config.ts`'s `test.setupFiles`. No code/test changes needed beyond that;
+    re-ran `Results.test.tsx` after the fix: clean pass.
+  - Two more harmless `React Router Future Flag Warning` messages on stderr, same as Task 24 —
+    noted, not a finding.
+  - `frontend` suite: 5/5 passing (up from Task 24's 4/4). `npm run build` **now stays green
+    end-to-end** (both `tsc -b` and `vite build`, confirming the `index.html` fix above holds under
+    a second, independent task). Repo-wide regression check: `backend/worker` 38/38,
+    `backend/shared` 12/12, `backend/api` 16/16, `mcp-server` 17/17 — all unchanged.
+  - No credential/secret handling — `createGithubIssue`'s call site in `Results.tsx` still carries
+    no token of its own (same as Task 23's client wrapper); the GitHub-auth infra gap (Task 22,
+    still open) applies once this button is used against a real deployment, not to anything added
+    in this task's own code.
 
 ---
 
@@ -1162,15 +1207,14 @@ the same reasoning Phase 3's own health-check recommendation gave.
   installed both at `^18` (matching the confirmed-installed `react@18.3.1`/`react-dom@18.3.1`),
   `devDependencies` only, no other package version changed. `tsc -b` now passes cleanly.
 
-- **KNOWN FOLLOW-UP, not yet scheduled to a task: `frontend/` has no `index.html`.** Found while
-  confirming `npm run build` passes cleanly after the `@types/react` install above — `tsc -b` now
-  succeeds, but `vite build` fails with `Could not resolve entry module "index.html"`. Grepped the
-  entire plan document: no task, anywhere, creates `frontend/index.html` — Vite requires one by
-  default as both its build entry point and dev-server entry. This was invisible through Tasks
-  23–24 because every earlier `npm run build` attempt failed earlier, at the `tsc` step, before
-  ever reaching `vite build`. Not added unilaterally — it's outside both Task 23's and Task 24's
-  own file lists, and creating one involves a judgment call (title, `<div id="root">`, script tag
-  pointing at `main.tsx`) the plan never specifies. Needs a decision: add a minimal `index.html`
-  now as a small out-of-band fix (cheapest, unblocks `npm run build`/`npm run dev` immediately), or
-  leave it flagged until a task that actually needs frontend serving forces the issue (Task 34's
-  nginx-ingress config, or Task 43's local full-stack `docker-compose` E2E smoke test).
+- **RESOLVED, user decided to add it now: `frontend/index.html` was missing (no task in the plan
+  ever created it).** Full verification steps and detail in the Phase 5 entry above (grepped the
+  whole plan for `index.html` and for `setupFiles`/`jest-dom`, confirmed the real entry
+  module/mount target from the repo, verified both `npm run build` and `npm run dev` boot clean
+  after adding a minimal file). `npm run build` is now fully green end-to-end.
+- **RESOLVED: `@testing-library/jest-dom` was a `devDependency` since Task 1 but never wired up
+  (no `setupFiles`, no import for its `expect.extend` side effect) — found via Task 25's
+  RED-verification (`toBeInTheDocument` → `Invalid Chai property`).** Fixed by adding
+  `frontend/src/setupTests.ts` (imports the already-installed `@testing-library/jest-dom/vitest`
+  subpath — no new dependency) and wiring it into `vitest.config.ts`'s `test.setupFiles`. Full
+  detail in the Task 25 entry above.
