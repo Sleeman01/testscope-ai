@@ -25,22 +25,26 @@ complete, not yet merged
 **Branch pattern in use:** `feature/phase-<N>-<short-description>`, one PR per phase (docs-only
 housekeeping like this entry uses `docs/<short-description>` instead)
 **Current branch:** `feature/phase-3-backend-worker` (cut from `main` after Phase 2's merge;
-not yet merged). Only Task 10 has been done on this branch — do NOT start Task 11 without the
-user's explicit go-ahead (Phase 3 has 8 tasks total, Task 10 through Task 17).
+not yet merged). Tasks 10 and 11 done on this branch — do NOT start Task 12 without the user's
+explicit go-ahead (Phase 3 has 8 tasks total, Task 10 through Task 17).
 **Last merged:** Phase 2 (Task 9, `backend/shared`) → `main`.
 **mcp-server test suite:** 17/17 passing, 90% coverage (`--cov=. --cov-report=term-missing`
 from `mcp-server/`), comfortably above the 80% target.
 **backend/shared test suite (Task 9):** 12/12 passing, 100% coverage (`--cov=. --cov-report=term-missing`
 from `backend/shared/`). Re-verified after Task 10's `pyproject.toml` fix (see Phase 3 entry
-below) — still 12/12, 100%.
-**backend/worker test suite (Task 10):** 3/3 passing (2 new `test_job_intake.py` + pre-existing
-smoke test), 39% overall coverage (`--cov=. --cov-report=term-missing` from `backend/worker/`)
-— `app/health.py` and `app/main.py` are explicitly untested per Task 10's own plan text ("not
-unit tested here — wired end-to-end in Task 17"), so the low overall % here is expected at this
-point in the phase, not a regression against the 80% CI gate (Task 36, not yet built).
-**Read before starting Task 11 or Task 22:** `docs/2026-07-30-testscope-ai-design.md` §5.2 — the
-GitHub MCP tool-name assumptions there were found wrong during Task 8's live verification (see
-Phase 1 entry below).
+below) — still 12/12, 100%; re-verified again via a fresh uninstall/reinstall from outside
+`backend/shared` before starting Task 11 (see Phase 3 entry below).
+**backend/worker test suite (Tasks 10–11):** 18/18 passing, 84% overall coverage
+(`--cov=. --cov-report=term-missing` from `backend/worker/`) — every Task 10/11 file at 100%
+except `app/health.py`/`app/main.py`/`app/state.py`, explicitly untested per Task 10's own plan
+text ("not unit tested here — wired end-to-end in Task 17"); not a regression against the 80%
+CI gate (Task 36, not yet built) once those three files are excluded.
+**Read before starting Task 12+:** `docs/2026-07-30-testscope-ai-design.md` §5.2 — the GitHub
+MCP tool-name assumptions there were found wrong during Task 8's live verification (see Phase 1
+entry below); Task 11 (Phase 3 entry below) already redesigned `request_validator`/
+`requirement_retriever` against the substitute-tool table, so Task 12+ can treat
+`app/mcp_clients.py`'s `call_github_tool`/`call_test_mcp_tool` as a settled, correct interface —
+no further §5.2 rework needed at the client layer, only new tool names per node as needed.
 
 ---
 
@@ -218,6 +222,68 @@ Phase 1 entry below).
   (`datetime.UTC` alias) warning — all in code copied verbatim from plan.md's own snippets.
   Left as-is, same precedent as Phase 1/Phase 2's pre-existing `I001` warnings (not a new
   regression, not worth diverging from the plan's literal snippets over a style-only lint rule).
+- **Task 11 (retry utility, MCP client wrapper, Request Validator, Requirement Retriever) ✅**,
+  TDD throughout. `retry.py` and `app/mcp_clients.py`'s retry/classification mechanics
+  implemented verbatim from plan.md (tool-name-agnostic, not affected by the staleness below).
+  Full worker suite after Task 11: 18/18 passing, every Task 10/11 file at 100% coverage except
+  the three files Task 10 explicitly deferred to Task 17.
+- **Verified before starting (per the user's explicit ask): the Task 10 `backend/shared`
+  `py-modules` fix lists every real module** (`config`, `dynamodb`, `models`, `s3`, `sqs` — the
+  package's only top-level `.py` files besides `__init__.py`, which nothing in the codebase
+  imports as a package name). Re-confirmed with a from-scratch check: uninstalled
+  `testscope-shared` entirely, confirmed `import dynamodb` then failed, reinstalled with
+  `pip install -e backend/shared` run from the repo root (not `backend/shared`), then imported
+  all 5 modules from the scratchpad directory — fully outside both `backend/shared` and
+  `backend/worker` — confirming the fix isn't cwd-dependent. `backend/worker`'s suite re-run
+  clean afterward.
+- **Deviation, plan-directed (not silent):** plan.md's own Task 11 text explicitly flags its
+  `mcp_clients.py`/`request_validator.py`/`requirement_retriever.py` code snippets as showing
+  "the plan's original (now known-wrong) tool names deliberately" and instructs
+  "whoever implements this task for real must first re-read design.md §5.2's substitute-tool
+  table... and redesign accordingly." Implemented per that instruction, not the literal snippets:
+  - `app/nodes/request_validator.py`: uses `search_repositories` (`query: f"repo:{owner}/{repo}"`,
+    `minimal_output: False`) instead of the non-existent `get_repository`; since it's a search
+    endpoint (not a direct lookup), a real "not found" surfaces as a zero-`items` success
+    response rather than a tool-level exception — handled as its own `status=failed` branch,
+    distinct from the exception-catching branch for genuine tool errors. Added a 3rd test
+    (`test_fails_gracefully_when_search_returns_zero_items`) beyond the plan's literal 2, to
+    cover this response-shape difference from the stale snippet's assumptions.
+  - `app/nodes/requirement_retriever.py`: issue body is fetched via a direct GitHub REST call
+    (`GET https://api.github.com/repos/{owner}/{repo}/issues/{issue_number}`,
+    `Authorization: Bearer <token>` from `os.environ["GITHUB_TOKEN"]`) per design.md §5.2's
+    standing architectural decision — no MCP tool returns a body by direct lookup. Comments still
+    route through MCP via `call_github_tool("issue_read", method="get_comments", ...)`. Used
+    `httpx2` (not plain `httpx`) for the REST call — confirmed API-compatible
+    (`AsyncClient.get`/`Response.raise_for_status`/`.json()`) before relying on it; it's already
+    a transitive dependency of the `mcp` 2.0.0 SDK (same package `mcp-server/github_client.py`
+    already uses for its own GitHub calls), not a new dependency addition. Added a 3rd test
+    (`test_fails_gracefully_when_issue_body_fetch_fails`) beyond the plan's literal 2, since
+    design.md documents a fallback for comments-fetch failure but not for body-fetch failure —
+    mirrors `request_validator`'s own catch-and-fail pattern for consistency.
+  - **Bug pre-empted, not just tool names:** plan.md's Task 11 `mcp_clients.py` snippet still
+    reads `result.structured_content`, but design.md §5.2 separately documents that this is
+    `None` for both `mcp-github`'s and `mcp-server`'s dict-returning tools, and explicitly says
+    "Tasks 11/22's future MCP clients should [parse `content[0].text` as JSON] rather than
+    assume it's populated." Fixed in `_call_once` before writing any test against it, matching
+    `mcp-server/github_client.py`'s established pattern — not caught by the plan's own
+    `test_mcp_clients.py` snippet, since it mocks `_call_once` out entirely.
+- **Coverage gap closed proactively, matching Phase 1's `test_github_client.py` precedent:**
+  the plan's own test snippets mock `_call_once` and (necessarily, since it's new) would have
+  left `_fetch_issue_body` similarly mocked-only, leaving their real transport/parsing logic at
+  0% coverage. Added `test_call_once_parses_json_text_payload_over_the_real_mcp_transport`
+  (mocks `streamable_http_client`/`ClientSession` at the transport boundary, same style as
+  `mcp-server/tests/test_github_client.py`), `test_fetch_issue_body_calls_the_real_github_rest_api`
+  (mocks `httpx2.AsyncClient` at the transport boundary), and
+  `test_call_test_mcp_tool_routes_to_the_test_analysis_mcp_url` (no node calls
+  `call_test_mcp_tool` yet — its callers are Tasks 13/14/15/17 — so this closes the gap directly
+  rather than leaving it uncovered until those tasks exist). Result: every Task 11 file at 100%.
+- **Test-only gap, not fixed:** `test_mcp_clients.py`'s `get_settings()` calls needed
+  `monkeypatch.setenv(...)` + `get_settings.cache_clear()` for all 5 required `Settings` fields
+  (only `mcp_github_url` is actually used) — the plan's literal Step 4 snippet omits this
+  entirely and would fail with a `pydantic` `ValidationError`, not the intended assertion.
+  Same fix pattern as `backend/shared/tests/test_config.py` (`get_settings` is `@lru_cache`d
+  across the whole test session, so env vars alone aren't enough without an explicit
+  `cache_clear()`).
 
 ---
 
