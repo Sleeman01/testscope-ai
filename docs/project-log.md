@@ -25,7 +25,7 @@ complete, not yet merged
 **Branch pattern in use:** `feature/phase-<N>-<short-description>`, one PR per phase (docs-only
 housekeeping like this entry uses `docs/<short-description>` instead)
 **Current branch:** `feature/phase-3-backend-worker` (cut from `main` after Phase 2's merge;
-not yet merged). Tasks 10–14 done on this branch — do NOT start Task 15 without the user's
+not yet merged). Tasks 10–15 done on this branch — do NOT start Task 16 without the user's
 explicit go-ahead (Phase 3 has 8 tasks total, Task 10 through Task 17).
 **Last merged:** Phase 2 (Task 9, `backend/shared`) → `main`.
 **mcp-server test suite:** 17/17 passing, 90% coverage (`--cov=. --cov-report=term-missing`
@@ -34,7 +34,7 @@ from `mcp-server/`), comfortably above the 80% target.
 from `backend/shared/`). Re-verified after Task 10's `pyproject.toml` fix (see Phase 3 entry
 below) — still 12/12, 100%; re-verified again via a fresh uninstall/reinstall from outside
 `backend/shared` before starting Task 11 (see Phase 3 entry below).
-**backend/worker test suite (Tasks 10–14):** 28/28 passing, 88% overall coverage
+**backend/worker test suite (Tasks 10–15):** 30/30 passing, 90% overall coverage
 (`--cov=. --cov-report=term-missing` from `backend/worker/`) — every node/client file at 100%
 except `app/health.py`/`app/main.py`/`app/state.py` (Task 10, deferred to Task 17 per the
 plan's own text) and `app/llm_client.py` (Task 12, deferred to the Task 17/E2E stub-LLM test
@@ -358,6 +358,25 @@ no further §5.2 rework needed at the client layer, only new tool names per node
 - Confirmed the framework-warning text (`"No supported test framework detected; results may be
   incomplete"`) matches design.md §13's Error Handling table verbatim (plan.md's snippet adds
   a trailing period; trivial, not changed).
+- **Task 15 (Test Plan Generator, Missing-Test Recommender nodes) ✅**, implemented verbatim
+  from plan.md — no `.root`/mock-shape mismatch like Task 14's, since this task's own test
+  snippets mock `call_llm` with real `TestPlan(root=[...])`/`MissingTests(root=[...])`
+  instances rather than bare lists. Confirmed the 10 `TEST_TYPES` categories match design.md
+  §4's Test Plan Generator row verbatim (`permission/role` shortened to `permission`, `API`/`UI`
+  lowercased — casing only, not a content change).
+  - **Same pytest-collision class of issue as Task 13, caught again by watching the test run
+    (not just by inspection):** `test_plan_generator` (the function) collides with pytest's
+    `test_*` discovery convention exactly like Task 13's three nodes — fixed the same way
+    (`test_plan_generator.__test__ = False`). Additionally, and new this task:
+    **`TestCase`/`TestPlan` (the imported Pydantic model classes) collide too** — pytest's
+    default `python_classes = Test*` pattern matches their names, producing
+    `PytestCollectionWarning: cannot collect test class ... because it has an __init__
+    constructor` (a warning, not a hard failure, since pydantic models define `__init__`
+    and pytest silently skips classes it can't instantiate that way — tests still passed,
+    but output wasn't pristine). Fixed with the same `__test__ = False` idiom applied to
+    both classes. `missing_test_recommender.py`'s `MissingTest`/`MissingTests` don't match
+    the `Test*` pattern, so no equivalent fix was needed there.
+  Full worker suite after: 30/30 passing, no warnings, both new node files at 100% coverage.
 
 ---
 
