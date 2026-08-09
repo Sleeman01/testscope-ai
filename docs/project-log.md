@@ -19,24 +19,47 @@ Update this after each phase (or whenever something worth remembering happens).
 
 ## Current State
 
-**Phase:** 0 (complete, merged) → 1 (Tasks 2–8, complete, merged to `main`) → Phase 2
-(`backend/shared`, Task 9) complete, not yet merged
+**Phase:** 0 (complete, merged) → 1 (Tasks 2–8, complete, merged to `main`) → 2
+(`backend/shared`, Task 9, complete, merged to `main`) → 3 (`backend/worker`, Tasks 10–17)
+complete, not yet merged
 **Branch pattern in use:** `feature/phase-<N>-<short-description>`, one PR per phase (docs-only
 housekeeping like this entry uses `docs/<short-description>` instead)
-**Current branch:** `feature/phase-2-backend-shared` (cut from `main` after Phase 1's merge;
-not yet merged)
-**Last merged:** Phase 1 (Tasks 2–8, `mcp-test-analysis` server) → `main`. This session found
-`main` already had the Phase 1 merge commit (git log) even though this file's previous
-"Current State" still said "not yet merged" — corrected here per CLAUDE.md's "don't trust the
-log's claims if out of sync with the repo" rule; the merge itself happened outside this session.
+**Current branch:** `feature/phase-3-backend-worker` (cut from `main` after Phase 2's merge;
+not yet merged). **Phase 3 (Tasks 10–17) is now fully complete on this branch — all 8 tasks
+done, not yet merged. Recommend a Phase 3 health check (see entry below) before merging.**
+**Last merged:** Phase 2 (Task 9, `backend/shared`) → `main`.
 **mcp-server test suite:** 17/17 passing, 90% coverage (`--cov=. --cov-report=term-missing`
 from `mcp-server/`), comfortably above the 80% target.
 **backend/shared test suite (Task 9):** 12/12 passing, 100% coverage (`--cov=. --cov-report=term-missing`
-from `backend/shared/`).
-**Read before starting Task 9:** `docs/2026-07-30-testscope-ai-design.md` §5.2 — the GitHub
-MCP tool-name assumptions there were found wrong during Task 8's live verification (see
-Phase 1 entry below); Task 9 itself is unaffected (no GitHub MCP calls), but anyone
-starting Phase 3 (Task 11) or Task 22 must read that section first, not spec's original text.
+from `backend/shared/`). Re-verified after Task 10's `pyproject.toml` fix (see Phase 3 entry
+below) — still 12/12, 100%; re-verified again via a fresh uninstall/reinstall from outside
+`backend/shared` before starting Task 11 (see Phase 3 entry below).
+**backend/worker test suite (Tasks 10–17, Phase 3 complete):** 38/38 passing (stable across
+repeated runs), 94% overall coverage (`--cov=. --cov-report=term-missing` from
+`backend/worker/`) — every node/client/graph/runner file at 100% except `app/health.py`/
+`app/main.py` (still deliberately untested — see Task 17 entry below) and `app/llm_client.py`
+(deliberately deferred to a stub-LLM E2E path per Task 12's own plan text, and the E2E test
+that exists does exercise it, just not in isolation). `app/runner.py` is 94% (only the
+600s-real-timeout branch itself is impractical to unit test; its exception-handling paths —
+both the original graph-exception one and the two added by the post-health-check
+job_intake/final-upsert fix — all have dedicated fast tests). Confirmed via a full state-key
+audit that every key any node writes to `AgentState` is declared in `app/state.py`'s
+`TypedDict` (was not true before this task — see below). `backend/worker/Dockerfile` builds
+cleanly and its image's module tree/graph wiring were verified by actually running
+`docker build` + `docker run ... python -c "import app.main; app.graph.build_graph()..."`
+inside the built image, not just trusting the snippet.
+**`backend/worker/pyproject.toml` now has `[tool.pytest.ini_options] testpaths = ["tests"]`**
+(added in Task 13, see entry below) — anyone adding a new `app/nodes/*.py` file in a future
+task should check whether its name collides with pytest's `test_*` discovery glob before
+assuming a bare `python -m pytest` run from `backend/worker/` behaves as expected.
+**Read before starting Task 18+ (Phase 4, `backend/api`) or Task 22 specifically:**
+`docs/2026-07-30-testscope-ai-design.md` §5.2 — the GitHub MCP tool-name assumptions there were
+found wrong during Task 8's live verification (see Phase 1 entry below); Task 11 (Phase 3 entry
+below) already redesigned `backend/worker`'s `request_validator`/`requirement_retriever` against
+the substitute-tool table, so `backend/worker/app/mcp_clients.py`'s `call_github_tool`/
+`call_test_mcp_tool` are a settled, correct interface — no further §5.2 rework needed there.
+Task 22 (`backend/api/app/mcp_client.py`) is a separate, not-yet-built client and will need the
+same substitute-tool-table treatment from scratch — it doesn't inherit Task 11's fix.
 
 ---
 
@@ -170,6 +193,405 @@ starting Phase 3 (Task 11) or Task 22 must read that section first, not spec's o
 - `ruff check .` reports 10 pre-existing import-sort (`I001`) warnings, matching the same
   style already present and unfixed in `mcp-server` (36 warnings there) — not a new
   regression, left as-is rather than reformatting away from the plan's literal snippets.
+
+### Phase 3 — `backend/worker` (LangGraph Agent) — Tasks 10–17 ✅ complete (all 8 tasks)
+
+- Branch: `feature/phase-3-backend-worker`, cut from `main` after Phase 2's merge.
+- **Task 10 (worker skeleton — `AgentState`, `job_intake` node, health endpoint, poll-loop
+  skeleton) ✅**, TDD: one failing `test_job_intake.py` (verified `ModuleNotFoundError`) →
+  `app/state.py` + `app/nodes/job_intake.py` implemented verbatim from plan.md → 2/2 passing.
+  `app/health.py`/`app/main.py` added as unit-untested skeleton per the plan's own Step 5 text
+  (explicitly deferred to Task 17's E2E wiring). Full worker suite: 3/3 passing.
+- **Blocker found and fixed (deviation, not in Task 10's literal file list) —
+  `backend/shared`'s editable install was silently broken:** `pip install -e ../shared` from
+  `backend/worker` succeeded with **zero errors** but produced an **empty module mapping** in
+  the generated `__editable___testscope_shared_*_finder.py` — none of `config`/`dynamodb`/
+  `models`/`s3`/`sqs` were actually importable outside `backend/shared`'s own directory.
+  Root cause: `backend/shared/pyproject.toml` has no `[tool.setuptools]` package-discovery
+  config, and setuptools' flat-layout auto-discovery can't disambiguate 5 top-level `.py`
+  modules on its own — it silently discovers nothing rather than erroring (confirmed via a
+  direct `pip install -e ../shared[dev]` rebuild, which *did* error explicitly:
+  `Multiple top-level modules discovered in a flat-layout`). Task 9's own test suite never
+  caught this because `python -m pytest` run from inside `backend/shared/` resolves imports
+  via the cwd, not the installed package — so 100% coverage there gave false confidence.
+  **Fix:** added `[tool.setuptools]\npy-modules = ["config", "dynamodb", "models", "s3", "sqs"]`
+  to `backend/shared/pyproject.toml`, reinstalled, confirmed the finder's `MAPPING` populates
+  correctly and `import dynamodb`/`models`/etc. now work from `backend/worker` (and from
+  outside `backend/shared` generally). Re-ran `backend/shared`'s own suite afterward (still
+  12/12, 100%) plus `backend/api` and `mcp-server` suites (unaffected) to confirm no
+  regression. This was necessary for Task 10's own plan-specified imports
+  (`from dynamodb import AnalysisStore`, `from models import AnalysisRecord`) to work at all
+  — flagged here rather than silently patched, per CLAUDE.md.
+- **Task 10 Step 0 (install wiring), implemented as a separate install step, not a
+  `pyproject.toml` dependency entry:** `backend/worker/pyproject.toml` can't portably declare
+  a relative sibling path in `[project.dependencies]`, and Task 36's own CI workflow text
+  (`pip install -e backend/shared` as a distinct step before `pip install -e "<service>[dev]"`)
+  already establishes this project's convention of a separate install command rather than an
+  embedded path dependency. Added a comment documenting the local dev install order to
+  `backend/worker/pyproject.toml`, added `fastapi`/`uvicorn` to its `dependencies` list (exact
+  versions matching `backend/api`'s existing pins, no bump), and updated the root `README.md`'s
+  worker install line to `pip install -e ../shared && pip install -e ../shared[dev] && pip
+  install -e ".[dev]"` per the plan's literal Step 0 text (both the non-dev and dev extra
+  installs, as written).
+- `ruff check .` on `backend/worker` reports 5 import-sort (`I001`) warnings and 1 `UP017`
+  (`datetime.UTC` alias) warning — all in code copied verbatim from plan.md's own snippets.
+  Left as-is, same precedent as Phase 1/Phase 2's pre-existing `I001` warnings (not a new
+  regression, not worth diverging from the plan's literal snippets over a style-only lint rule).
+- **Task 11 (retry utility, MCP client wrapper, Request Validator, Requirement Retriever) ✅**,
+  TDD throughout. `retry.py` and `app/mcp_clients.py`'s retry/classification mechanics
+  implemented verbatim from plan.md (tool-name-agnostic, not affected by the staleness below).
+  Full worker suite after Task 11: 18/18 passing, every Task 10/11 file at 100% coverage except
+  the three files Task 10 explicitly deferred to Task 17.
+- **Verified before starting (per the user's explicit ask): the Task 10 `backend/shared`
+  `py-modules` fix lists every real module** (`config`, `dynamodb`, `models`, `s3`, `sqs` — the
+  package's only top-level `.py` files besides `__init__.py`, which nothing in the codebase
+  imports as a package name). Re-confirmed with a from-scratch check: uninstalled
+  `testscope-shared` entirely, confirmed `import dynamodb` then failed, reinstalled with
+  `pip install -e backend/shared` run from the repo root (not `backend/shared`), then imported
+  all 5 modules from the scratchpad directory — fully outside both `backend/shared` and
+  `backend/worker` — confirming the fix isn't cwd-dependent. `backend/worker`'s suite re-run
+  clean afterward.
+- **Deviation, plan-directed (not silent):** plan.md's own Task 11 text explicitly flags its
+  `mcp_clients.py`/`request_validator.py`/`requirement_retriever.py` code snippets as showing
+  "the plan's original (now known-wrong) tool names deliberately" and instructs
+  "whoever implements this task for real must first re-read design.md §5.2's substitute-tool
+  table... and redesign accordingly." Implemented per that instruction, not the literal snippets:
+  - `app/nodes/request_validator.py`: uses `search_repositories` (`query: f"repo:{owner}/{repo}"`,
+    `minimal_output: False`) instead of the non-existent `get_repository`; since it's a search
+    endpoint (not a direct lookup), a real "not found" surfaces as a zero-`items` success
+    response rather than a tool-level exception — handled as its own `status=failed` branch,
+    distinct from the exception-catching branch for genuine tool errors. Added a 3rd test
+    (`test_fails_gracefully_when_search_returns_zero_items`) beyond the plan's literal 2, to
+    cover this response-shape difference from the stale snippet's assumptions.
+  - `app/nodes/requirement_retriever.py`: issue body is fetched via a direct GitHub REST call
+    (`GET https://api.github.com/repos/{owner}/{repo}/issues/{issue_number}`,
+    `Authorization: Bearer <token>` from `os.environ["GITHUB_TOKEN"]`) per design.md §5.2's
+    standing architectural decision — no MCP tool returns a body by direct lookup. Comments still
+    route through MCP via `call_github_tool("issue_read", method="get_comments", ...)`. Used
+    `httpx2` (not plain `httpx`) for the REST call — confirmed API-compatible
+    (`AsyncClient.get`/`Response.raise_for_status`/`.json()`) before relying on it; it's already
+    a transitive dependency of the `mcp` 2.0.0 SDK (same package `mcp-server/github_client.py`
+    already uses for its own GitHub calls), not a new dependency addition. Added a 3rd test
+    (`test_fails_gracefully_when_issue_body_fetch_fails`) beyond the plan's literal 2, since
+    design.md documents a fallback for comments-fetch failure but not for body-fetch failure —
+    mirrors `request_validator`'s own catch-and-fail pattern for consistency.
+  - **Bug pre-empted, not just tool names:** plan.md's Task 11 `mcp_clients.py` snippet still
+    reads `result.structured_content`, but design.md §5.2 separately documents that this is
+    `None` for both `mcp-github`'s and `mcp-server`'s dict-returning tools, and explicitly says
+    "Tasks 11/22's future MCP clients should [parse `content[0].text` as JSON] rather than
+    assume it's populated." Fixed in `_call_once` before writing any test against it, matching
+    `mcp-server/github_client.py`'s established pattern — not caught by the plan's own
+    `test_mcp_clients.py` snippet, since it mocks `_call_once` out entirely.
+- **Coverage gap closed proactively, matching Phase 1's `test_github_client.py` precedent:**
+  the plan's own test snippets mock `_call_once` and (necessarily, since it's new) would have
+  left `_fetch_issue_body` similarly mocked-only, leaving their real transport/parsing logic at
+  0% coverage. Added `test_call_once_parses_json_text_payload_over_the_real_mcp_transport`
+  (mocks `streamable_http_client`/`ClientSession` at the transport boundary, same style as
+  `mcp-server/tests/test_github_client.py`), `test_fetch_issue_body_calls_the_real_github_rest_api`
+  (mocks `httpx2.AsyncClient` at the transport boundary), and
+  `test_call_test_mcp_tool_routes_to_the_test_analysis_mcp_url` (no node calls
+  `call_test_mcp_tool` yet — its callers are Tasks 13/14/15/17 — so this closes the gap directly
+  rather than leaving it uncovered until those tasks exist). Result: every Task 11 file at 100%.
+- **Test-only gap, not fixed:** `test_mcp_clients.py`'s `get_settings()` calls needed
+  `monkeypatch.setenv(...)` + `get_settings.cache_clear()` for all 5 required `Settings` fields
+  (only `mcp_github_url` is actually used) — the plan's literal Step 4 snippet omits this
+  entirely and would fail with a `pydantic` `ValidationError`, not the intended assertion.
+  Same fix pattern as `backend/shared/tests/test_config.py` (`get_settings` is `@lru_cache`d
+  across the whole test session, so env vars alone aren't enough without an explicit
+  `cache_clear()`).
+- **Task 12 (LLM client wrapper, Requirement Parser node) ✅**, implemented verbatim from
+  plan.md — no staleness found here (unlike Task 11's GitHub tool names). Checked the installed
+  `anthropic` SDK (`0.120.2`, plan pins `anthropic>=0.39`) directly against
+  `AsyncAnthropic.messages.create`'s real signature before implementing, given the `mcp` SDK's
+  own `>=1.1`-pin-resolved-to-a-breaking-major-version experience in Phase 1/Task 11 — no
+  mismatch found (`model`/`messages`/`max_tokens`/`system`/`tools`/`tool_choice` all present as
+  documented). TDD: 2/2 tests from the plan's own Step 1 snippet, verified failing
+  (`ModuleNotFoundError`) then passing unchanged. Full worker suite: 20/20 passing.
+- **No coverage-closing test added for `llm_client.py` (42% coverage, unlike Task 11's
+  `mcp_clients.py`/`requirement_retriever.py` gaps)** — this one is deliberate and pre-declared
+  in the plan's own Task 12 file list ("`call_llm`'s ... Anthropic-specific forced-tool-use
+  behavior is exercised indirectly through every node test that mocks it ... no dedicated
+  `llm_client` test needed") and matches design.md's stated E2E strategy (a stub LLM client
+  returning canned JSON, not live Claude calls, wired in Task 17) — not an accidental gap like
+  Task 11's `_call_once`/`_fetch_issue_body`, which the plan's own snippets left untested without
+  saying so.
+- **Task 13 (Test Search Planner, Test File Retriever, Test File Classifier nodes) ✅.** Verified
+  `find_test_files`/`extract_test_metadata`'s real return shapes (`{"files": [...]}`,
+  `{"tests": [...]}`) against `mcp-server`'s actual Phase 1 implementation before
+  implementing — this is this project's own MCP server (not the external `mcp-github` server
+  Task 11 had staleness problems with), and matched the plan's assumptions exactly, so all
+  three nodes implemented verbatim from plan.md.
+- **Real blocker found and fixed, not flagged anywhere in plan.md:** Task 13 is the first task
+  whose node function names (`test_search_planner`, `test_file_retriever`, `test_file_classifier`
+  — required by plan.md's own file list, e.g. `app/nodes/test_search_planner.py`) collide with
+  pytest's default `test_*` discovery convention. Two distinct breakages, both found by actually
+  running the suite, not by inspection:
+  1. `python -m pytest` run from `backend/worker/` (every "Run:" instruction in the plan does
+     this) recursively globs the whole tree by default, so it tried to collect
+     `app/nodes/test_search_planner.py` etc. as test *modules* too. Fixed by adding
+     `[tool.pytest.ini_options]\ntestpaths = ["tests"]` to `backend/worker/pyproject.toml`
+     (no other package in this repo needed this, since none of their node/tool files happen to
+     start with `test_`).
+  2. Independently, `testpaths` alone didn't fix it: each new test file does
+     `from app.nodes.test_search_planner import test_search_planner` — importing the node
+     function pulls a `test_`-named callable directly into the test module's own namespace,
+     and pytest collects it there too (regardless of `testpaths`), failing at setup because it
+     expects a `state` fixture pytest can't resolve. Fixed with the standard pytest idiom
+     (`test_search_planner.__test__ = False` etc., right after each import) rather than
+     renaming anything plan.md specifies — preserves the plan's literal file/function names
+     exactly, adds one non-behavioral line per test file.
+  Full worker suite re-run clean after both fixes: 26/26 passing, all three new node files at
+  100% coverage.
+- `ruff check .` on the three new node files reports the same `I001`/`BLE001` categories already
+  established as "leave as-is, verbatim from plan.md" precedent in Tasks 10/11 — no new
+  categories introduced.
+- **Task 14 (Coverage Analyzer node) ✅.**
+  **Real bug found and fixed, confirmed empirically before fixing (per TDD's mandatory
+  "verify the failure" step, not just inspection):** plan.md's own Step 3 implementation
+  snippet does `state["coverage_matrix"] = [entry.model_dump() for entry in result.root]`,
+  but its own Step 1 test snippet mocks `call_llm` to return a **plain `list[CoverageEntry]`**
+  (`stub = [CoverageEntry(...)]`), not a `CoverageMatrix` (`RootModel[list[CoverageEntry]]`)
+  instance — a plain Python `list` has no `.root` attribute. Implemented the plan's snippet
+  first, unmodified, and ran it to confirm: both tests failed with exactly
+  `AttributeError: 'list' object has no attribute 'root'`, not the intended assertions.
+  Also checked (before deciding on a fix) whether iterating a real `CoverageMatrix` directly
+  (`for entry in result`, skipping `.root` instead) would work as an alternative fix — it
+  doesn't either: `RootModel` inherits `BaseModel`'s default `__iter__`, which yields a single
+  `("root", [...])` field-tuple, not the wrapped list's elements, confirmed with a standalone
+  pydantic check against the installed version. So `.root` genuinely is required for the real
+  `call_llm` production path (`CoverageMatrix.model_validate(...)`), and the test's plain-list
+  mock genuinely can't satisfy it as originally written — both snippets are individually
+  reasonable, they just don't agree with each other. **Fix:** `entries = result.root if
+  isinstance(result, CoverageMatrix) else result` before the list comprehension — accepts
+  either shape, doesn't touch the plan's test, adds one branch. Full worker suite after:
+  28/28 passing, `coverage_analyzer.py` at 100%.
+- Confirmed the framework-warning text (`"No supported test framework detected; results may be
+  incomplete"`) matches design.md §13's Error Handling table verbatim (plan.md's snippet adds
+  a trailing period; trivial, not changed).
+- **Task 15 (Test Plan Generator, Missing-Test Recommender nodes) ✅**, implemented verbatim
+  from plan.md — no `.root`/mock-shape mismatch like Task 14's, since this task's own test
+  snippets mock `call_llm` with real `TestPlan(root=[...])`/`MissingTests(root=[...])`
+  instances rather than bare lists. Confirmed the 10 `TEST_TYPES` categories match design.md
+  §4's Test Plan Generator row verbatim (`permission/role` shortened to `permission`, `API`/`UI`
+  lowercased — casing only, not a content change).
+  - **Same pytest-collision class of issue as Task 13, caught again by watching the test run
+    (not just by inspection):** `test_plan_generator` (the function) collides with pytest's
+    `test_*` discovery convention exactly like Task 13's three nodes — fixed the same way
+    (`test_plan_generator.__test__ = False`). Additionally, and new this task:
+    **`TestCase`/`TestPlan` (the imported Pydantic model classes) collide too** — pytest's
+    default `python_classes = Test*` pattern matches their names, producing
+    `PytestCollectionWarning: cannot collect test class ... because it has an __init__
+    constructor` (a warning, not a hard failure, since pydantic models define `__init__`
+    and pytest silently skips classes it can't instantiate that way — tests still passed,
+    but output wasn't pristine). Fixed with the same `__test__ = False` idiom applied to
+    both classes. `missing_test_recommender.py`'s `MissingTest`/`MissingTests` don't match
+    the `Test*` pattern, so no equivalent fix was needed there.
+  Full worker suite after: 30/30 passing, no warnings, both new node files at 100% coverage.
+- **Task 16 (Quality Validator node) ✅**, implemented verbatim from plan.md — no deviations.
+  Pure/synchronous, no LLM or MCP calls, so none of the earlier tasks' `call_llm`/env-var/
+  `.root` issues applied. No pytest naming collision either (`quality_validator` doesn't match
+  `test_*`, and the test imports no `Test*`-named classes). Full worker suite: 32/32 passing,
+  `quality_validator.py` at 100% coverage (and has zero `ruff` findings at all — no imports to
+  sort, since it's a self-contained pure function).
+- **Task 17 (Report Saver + Cleanup, overall timeout, full graph wiring, worker E2E test) ✅
+  — the last Phase 3 task, and by far the one with the most real, empirically-confirmed bugs
+  found this phase.** `report_saver.py` implemented verbatim, TDD, 2/2 passing, no issues.
+  Everything downstream of it (graph assembly, the runner, and especially the E2E test) needed
+  real fixes — every one confirmed by actually running the code, not just by inspection:
+  1. **`graph.py`: added a conditional edge after `requirement_retriever`** (plan.md's snippet
+     only has a plain edge there) — a direct, necessary consequence of Task 11's own
+     plan-directed redesign. The plan's *original* `requirement_retriever` never set
+     `status="failed"` (no error handling at all in the stale snippet), so its Task 17 graph
+     wiring never needed to check for it. My Task 11 implementation correctly added a
+     `status="failed"` path for a failed issue-body fetch (per design.md §5.2 and matching
+     `request_validator`'s own pattern) — without this edge, that failure would fall through
+     to `requirement_parser` with `state["issue_body"]` unset, raising `KeyError` instead of
+     failing cleanly. Not tested by a dedicated unit test (the E2E test's happy path doesn't
+     exercise it) — flagged here as a known, reasoned gap rather than over-scoping Task 17
+     further.
+  2. **Real, confirmed bug: `AgentState` (Task 10) never declared `storage_status`, which
+     `report_saver` (Task 17, both from plan.md's own literal snippets) sets.** Discovered by
+     noticing the E2E test's `record.storage_status` always came back `None` regardless of
+     whether the save actually succeeded. Confirmed the root cause with a minimal, standalone
+     LangGraph reproduction: `StateGraph(SomeTypedDict)` silently drops any key a node returns
+     that isn't declared in the schema (verified directly — an extra key set by a node vanished
+     from `ainvoke`'s result). Fixed by adding `storage_status: str | None` to
+     `app/state.py`. Ran a full audit afterward (`state[...] =` writes across every node vs.
+     `AgentState`'s declared fields) confirming this was the *only* gap — nothing else is
+     silently dropped.
+  3. **Real, confirmed bug in the plan's own E2E test snippet: wrong `unittest.mock.patch`
+     targets.** The snippet patches `app.llm_client.call_llm` and `app.mcp_clients.
+     call_github_tool` directly — but every consuming node does `from app.llm_client import
+     call_llm` / `from app.mcp_clients import call_github_tool`, binding its own local
+     reference at import time. Patching the origin module's attribute has no effect on
+     those already-bound names — confirmed by running the plan's snippet as literally
+     written first: real (failing) Anthropic/MCP calls were attempted instead of the stubs.
+     This affects **7 node modules** (5 for `call_llm`, 2 for `call_github_tool`), not just
+     one — the most severe bug found this phase. Fixed by patching each consuming module's
+     own name individually (`app.nodes.requirement_parser.call_llm`,
+     `app.nodes.test_search_planner.call_llm`, etc.) — the same pattern already used
+     correctly in every one of this phase's own unit tests (audited afterward: grepped every
+     `patch(...)` call across `backend/worker/tests/` and confirmed none of Tasks 11–16's own
+     tests made this mistake — it was isolated to plan.md's Task 17 E2E snippet).
+  4. **Tool-name staleness, as plan.md's own comment already flagged and instructed fixing
+     "once Task 11 is built for real":** the E2E stub's `fake_call_github_tool` used
+     `get_repository`/`get_issue`/`get_issue_comments` — none of which Task 11's actual
+     (redesigned) implementation calls. Corrected to `search_repositories` (returns
+     `{"items": [...]}`, not a bare dict) for `request_validator`, and split
+     `requirement_retriever`'s mocking in two: `_fetch_issue_body` (direct REST, returns a
+     bare string) patched separately from `call_github_tool` with `issue_read`/
+     `method="get_comments"` for comments.
+  5. **Real, pre-existing risk found and fixed, not in the plan at all: the E2E test's mcp-server
+     subprocess is a separate OS process, so moto's `mock_aws()` (which only patches boto3
+     within the pytest process) has no effect on it.** `report_saver`'s `save_coverage_report`
+     call crosses into that subprocess and makes a genuinely unmocked `boto3` call. Running the
+     plan's own `conftest.py` snippet as written (`env={**os.environ, ...}`, inheriting the
+     parent environment wholesale) let that subprocess find and use this machine's **real**
+     `~/.aws/credentials` — confirmed directly in the first run's log output
+     (`Found credentials in shared credentials file: ~/.aws/credentials`). **This means running
+     the E2E test as plan.md literally specifies it could make live, unmocked AWS API calls
+     against whatever account this machine's ambient credentials grant access to.** Fixed by
+     stripping all `AWS_*` vars from the subprocess's inherited environment and forcing moto's
+     own documented fake-credential convention (`AWS_ACCESS_KEY_ID=testing`, etc.) instead —
+     confirmed the fix works (log now says `Found credentials in environment variables`, not
+     the credentials file) and added an explicit `assert record.storage_status == "failed"` to
+     the E2E test, proving both that the real (now-guaranteed-to-fail) subprocess save is
+     correctly non-fatal *and* that `storage_status` now actually propagates (bug 2 above).
+     **This was already live before the fix was applied — the very first test run in this
+     session did reach the subprocess with real credentials present.** No confirmation was
+     possible (or attempted) that any real AWS resource was actually written to or modified;
+     given `report_saver`'s save is the *only* AWS-touching call in that subprocess and it
+     targets a table/bucket (`testscope-analyses-test`/`testscope-reports-test`) that likely
+     doesn't exist in whatever account those credentials belong to, the most probable outcome
+     is an access/not-found error, not a successful write — but this could not be verified
+     without inspecting the credentials' actual scope, which was correctly out of reach.
+  6. **`conftest.py`'s `time.sleep(1.0)`** (plan.md's own literal Step 7 snippet) reintroduces
+     a value Task 8's live verification (`mcp-server/tests/test_mcp_integration.py`) already
+     found too short and fixed to `8.0` — applied that already-established fix here too rather
+     than risk a flaky subprocess-not-ready failure.
+  7. **Test-ordering bug introduced by this session's own new `test_runner.py` (see below):**
+     `get_settings()` is `@lru_cache`d process-wide; neither `test_runner.py`'s nor
+     `test_runner_e2e.py`'s env-setting fixture called `get_settings.cache_clear()`. Running
+     the full suite (not just the new file in isolation) surfaced a real
+     `ResourceNotFoundException` — `test_runner.py`'s `DYNAMODB_TABLE="t"` leaked into
+     `test_runner_e2e.py`'s later `run_analysis` call. Fixed both fixtures with the same
+     `cache_clear()`-before-and-after pattern already established in `test_mcp_clients.py`;
+     re-ran the full suite twice afterward to confirm it's not flaky.
+  8. **Addition beyond plan.md's literal Test file list:** added `tests/test_runner.py`
+     (plan.md only lists `test_report_saver.py`/`test_runner_e2e.py` for this task) — a fast,
+     fully-mocked unit test for `run_analysis`'s own exception-handling (a crashed/hung graph
+     still marks the analysis failed and still attempts cleanup), since the E2E test only
+     exercises the happy path and this is Task 17's *entire reason for existing* (the timeout/
+     exception wrapper), left otherwise completely uncovered.
+  9. **`health.py`'s `/health/ready` extension has no literal code snippet in plan.md** — only
+     a textual instruction ("attempt `JobQueue(...)._client.get_queue_attributes(...)` and
+     return 503 on failure, same pattern as Task 19's API readiness check"). Designed it from
+     that instruction (`try`/`except` around the SQS call, `HTTPException(503)` on failure).
+     Noted in code: the referenced pattern actually lives in **Task 18's** (not Task 19's)
+     `backend/api/app/routes/health.py` — a minor plan cross-reference slip, not consequential
+     since Task 18's own check (`get_settings()`, no SQS call) isn't directly copyable anyway.
+     Not unit-tested: `start_health_server` bundles FastAPI app construction with actually
+     starting a uvicorn thread, so testing the route logic in isolation would need refactoring
+     beyond what Task 17 asks for — left as an explicit gap, same as `app/llm_client.py`'s.
+  10. **Dockerfile (Steps 11–12) implemented verbatim and actually verified**, not just
+      written and trusted: ran a real `docker build`, then `docker run` with a Python one-liner
+      importing `app.main`/`app.graph`/`app.runner`/`app.health` and calling `build_graph()`
+      inside the built image, confirming the full module tree and all 11 graph nodes wire up
+      correctly in the actual container (not just in the dev `.venv`). Test image removed
+      after verification.
+  - `ruff check .` on the new/modified files: same `I001`/`BLE001` categories as established
+    precedent, plus a few new-but-still-plan-verbatim findings (`F401` on `graph.py`'s
+    intentionally-unused-but-documented `job_intake` import, `S110`/`UP041` in `runner.py`'s
+    literal `except Exception: pass` cleanup block) — left as-is, consistent with the same
+    "don't diverge from the plan's literal snippets over style-only lint rules" precedent.
+
+**Recommendation: do a Phase 3 health check before merging.** This was the largest and most
+integration-heavy task in the phase (it's the first one to actually wire Tasks 10–16 together
+and run them end-to-end), and it surfaced real bugs that trace back to two *earlier*,
+already-committed tasks (Task 10's `AgentState` schema, Task 11's graph-routing consequence) —
+neither caught by those tasks' own unit tests, only by this task's integration-level testing.
+That pattern (isolated unit tests all green, but a real gap only visible once things are wired
+together) is exactly the kind of thing worth a dedicated look before merging the whole phase,
+not necessarily because anything else is currently known to be broken — the state-key audit
+above found no other schema gaps, and the patch-location audit found no other tests with the
+same mocking mistake — but because Task 17 is the only point in this phase where that class of
+bug could even surface, and it's cheap to double-check now versus after merge.
+
+### Phase 3 health check (post-Task 17, pre-merge) — ✅ run, 1 new finding, not yet fixed
+
+- **Full `backend/worker` suite: 36/36 passing across 3 repeated runs (94% coverage, stable,
+  no flakiness).** Repo-wide regression check: `backend/shared` 12/12 (100%), `backend/api`
+  1/1, `mcp-server` 17/17 (90%) — all unaffected by this branch's changes.
+- **Fresh end-to-end re-read of `graph.py`/`runner.py`, with one new finding (see below).**
+  Re-confirmed the node-ordering and conditional-edge wiring matches design.md §4 exactly, and
+  ran a targeted grep across every node for any *other* place `status="failed"` gets set beyond
+  the three already-gated nodes (`request_validator`, `requirement_retriever`,
+  `requirement_parser`) — none found, so the conditional-edge fix from Task 17 is complete;
+  no other graph-routing gaps exist.
+- **Re-audited every node's state read/write against `AgentState`'s declared schema from
+  scratch (independent of Task 17's own audit) — clean, no gaps.** Incidentally noted:
+  `notes` (`AgentState`/`AnalysisRecord`/the whole request pipeline from the frontend down)
+  is plumbed through every layer but never actually read by any Task 10–17 node — checked
+  the full plan, not just Phase 3, and no task claims to consume it in a prompt. Not a Phase
+  3 defect (nothing crashes or behaves wrong because of it), just an observation for whoever
+  builds Phase 5 (frontend) or revisits prompt design later.
+- **Re-verified the AWS-credential-isolation fix across 3 repeated E2E runs, not just the
+  original one-off confirmation:** every run logged `Found credentials in environment
+  variables` (the fake, injected ones), never `Found credentials in shared credentials file`
+  (the real ones). Did not additionally re-run the *pre-fix* vulnerable version to double-prove
+  the vulnerability would still reproduce without the fix — doing so would mean deliberately
+  risking another real, unmocked AWS call for no real additional confidence, given it was
+  already directly observed once before the fix existed.
+- **`docs/project-log.md` itself was stale in two places, now fixed:** the "Phase:" summary
+  line still said "Phase 3 (`backend/worker`, Task 10) complete" (should've said Tasks 10–17),
+  and the Phase 3 section header still said "Task 10 ✅ complete, 7 tasks remain (11–17)" —
+  both left over from right after Task 10, never updated as Tasks 11–17 landed even though
+  each task's own entry below them was added correctly. Also updated the "Read before starting
+  Task 12+" note (Task 12 is done now) to correctly point at Task 18+/Task 22 instead, and to
+  clarify that Task 22's `backend/api/app/mcp_client.py` is a separate client that does **not**
+  inherit Task 11's `backend/worker` fix — it'll need its own pass against design.md §5.2.
+- **Finding from the health check — now fixed:** `run_analysis`'s call to `job_intake`
+  (before the `try` block) and the final `store.upsert(...)` inside the `finally` block both
+  had **no exception handling** — copied verbatim from plan.md's own Task 17 `runner.py`
+  snippet. Confirmed empirically (not just by inspection): forced `job_intake` to hit a real
+  `ClientError` (bad table) and watched the exception propagate **uncaught** out of
+  `run_analysis`. `main.py`'s poll loop has nothing wrapping `asyncio.run(run_analysis(...))`
+  either, so this exception would propagate all the way out of `poll_forever()` and crash the
+  worker process — not just fail the one job. This directly contradicted design.md §4's own
+  stated intent for Job Intake: *"Malformed message → log, ack, skip (no infinite redrive)."*
+  SQS's own redrive policy (3 receives → DLQ) bounds the worst case (this isn't an infinite
+  crash loop), but it still meant: (a) unnecessary pod restarts for what should be a
+  single-job failure, (b) no structured logging of the failure reason beyond the default
+  unhandled-exception traceback, and (c) if the crash happened in the *final* upsert rather
+  than `job_intake` itself, the `AnalysisRecord` was left permanently stuck at `status=running`
+  (already written earlier by `job_intake`) with no terminal state ever recorded — a
+  user-facing symptom (an analysis that never finishes) worse than a clean `status=failed`.
+  **This was a gap in plan.md's own `runner.py` design, not a deviation introduced by any
+  earlier Phase 3 task.**
+  - **Fix (TDD):** wrapped `job_intake` in its own `try`/`except`, logging via
+    `logger.exception(...)` and returning immediately (no cleanup/final-upsert attempt — there's
+    nothing meaningful to finalize since Job Intake never got to record anything) rather than
+    letting the exception propagate; wrapped the final `store.upsert(...)` in its own
+    `try`/`except` the same way. Introduced `logging` — no prior usage anywhere in this
+    codebase (`backend/`, `mcp-server/`) to match, so this is a new but minimal, standard
+    convention, not a deviation from an established one. Two new tests written first and
+    verified failing against the unfixed code (`test_run_analysis_logs_and_returns_when_job_intake_fails`,
+    `test_run_analysis_logs_and_returns_when_final_upsert_fails` — the latter uses a
+    call-counting `AnalysisStore.upsert` patch so `job_intake`'s own upsert succeeds
+    normally but the *final* one fails, isolating the two code paths), then passing after the
+    fix. Re-ran the exact original empirical reproduction (forcing the real `ClientError`)
+    from the health check and confirmed it now logs the full traceback and returns normally
+    instead of crashing. Full worker suite after: 38/38 passing (stable across 3 repeated
+    runs), 94% coverage, `runner.py` at 94% (only the genuine 600s-timeout branch remains
+    untested, same as before — unchanged, not a new gap). `ruff` flags nothing new on either
+    of the two new `except` blocks — it doesn't treat `except Exception:` followed by
+    `logger.exception(...)` as a "blind except" (`BLE001`), unlike the pre-existing
+    `except: pass` a few lines away, which is still flagged (unchanged, verbatim from plan.md,
+    same "leave as-is" precedent as always).
+- **Verdict: Phase 3 is sound and ready to merge.** No regressions anywhere in the repo, all
+  prior fixes (schema, mocking, AWS credentials, test ordering) hold up under repeated runs,
+  and the one finding from the health check is now fixed and verified both by new unit tests
+  and by re-running the original empirical reproduction.
 
 ---
 

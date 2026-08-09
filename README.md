@@ -33,7 +33,7 @@ Each Python service is an independently installable package, installed into that
 
 ```bash
 cd backend/api && pip install -e ".[dev]" && python -m pytest
-cd backend/worker && pip install -e ".[dev]" && python -m pytest
+cd backend/worker && pip install -e ../shared && pip install -e ../shared[dev] && pip install -e ".[dev]" && python -m pytest
 cd backend/shared && pip install -e ".[dev]" && python -m pytest
 cd mcp-server && pip install -e ".[dev]" && python -m pytest
 ```
