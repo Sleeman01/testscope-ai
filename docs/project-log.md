@@ -25,7 +25,7 @@ complete, not yet merged
 **Branch pattern in use:** `feature/phase-<N>-<short-description>`, one PR per phase (docs-only
 housekeeping like this entry uses `docs/<short-description>` instead)
 **Current branch:** `feature/phase-3-backend-worker` (cut from `main` after Phase 2's merge;
-not yet merged). Tasks 10–13 done on this branch — do NOT start Task 14 without the user's
+not yet merged). Tasks 10–14 done on this branch — do NOT start Task 15 without the user's
 explicit go-ahead (Phase 3 has 8 tasks total, Task 10 through Task 17).
 **Last merged:** Phase 2 (Task 9, `backend/shared`) → `main`.
 **mcp-server test suite:** 17/17 passing, 90% coverage (`--cov=. --cov-report=term-missing`
@@ -34,12 +34,12 @@ from `mcp-server/`), comfortably above the 80% target.
 from `backend/shared/`). Re-verified after Task 10's `pyproject.toml` fix (see Phase 3 entry
 below) — still 12/12, 100%; re-verified again via a fresh uninstall/reinstall from outside
 `backend/shared` before starting Task 11 (see Phase 3 entry below).
-**backend/worker test suite (Tasks 10–13):** 26/26 passing, 88% overall coverage
-(`--cov=. --cov-report=term-missing` from `backend/worker/`) — every Task 10/11/12/13 node/client
-file at 100% except `app/health.py`/`app/main.py`/`app/state.py` (Task 10, deferred to Task 17
-per the plan's own text) and `app/llm_client.py` (Task 12, deferred to the Task 17/E2E stub-LLM
-test per the plan's own text — "no dedicated `llm_client` test needed"); not a regression
-against the 80% CI gate (Task 36, not yet built) once those four files are excluded.
+**backend/worker test suite (Tasks 10–14):** 28/28 passing, 88% overall coverage
+(`--cov=. --cov-report=term-missing` from `backend/worker/`) — every node/client file at 100%
+except `app/health.py`/`app/main.py`/`app/state.py` (Task 10, deferred to Task 17 per the
+plan's own text) and `app/llm_client.py` (Task 12, deferred to the Task 17/E2E stub-LLM test
+per the plan's own text — "no dedicated `llm_client` test needed"); not a regression against
+the 80% CI gate (Task 36, not yet built) once those four files are excluded.
 **`backend/worker/pyproject.toml` now has `[tool.pytest.ini_options] testpaths = ["tests"]`**
 (added in Task 13, see entry below) — anyone adding a new `app/nodes/*.py` file in a future
 task should check whether its name collides with pytest's `test_*` discovery glob before
@@ -335,6 +335,29 @@ no further §5.2 rework needed at the client layer, only new tool names per node
 - `ruff check .` on the three new node files reports the same `I001`/`BLE001` categories already
   established as "leave as-is, verbatim from plan.md" precedent in Tasks 10/11 — no new
   categories introduced.
+- **Task 14 (Coverage Analyzer node) ✅.**
+  **Real bug found and fixed, confirmed empirically before fixing (per TDD's mandatory
+  "verify the failure" step, not just inspection):** plan.md's own Step 3 implementation
+  snippet does `state["coverage_matrix"] = [entry.model_dump() for entry in result.root]`,
+  but its own Step 1 test snippet mocks `call_llm` to return a **plain `list[CoverageEntry]`**
+  (`stub = [CoverageEntry(...)]`), not a `CoverageMatrix` (`RootModel[list[CoverageEntry]]`)
+  instance — a plain Python `list` has no `.root` attribute. Implemented the plan's snippet
+  first, unmodified, and ran it to confirm: both tests failed with exactly
+  `AttributeError: 'list' object has no attribute 'root'`, not the intended assertions.
+  Also checked (before deciding on a fix) whether iterating a real `CoverageMatrix` directly
+  (`for entry in result`, skipping `.root` instead) would work as an alternative fix — it
+  doesn't either: `RootModel` inherits `BaseModel`'s default `__iter__`, which yields a single
+  `("root", [...])` field-tuple, not the wrapped list's elements, confirmed with a standalone
+  pydantic check against the installed version. So `.root` genuinely is required for the real
+  `call_llm` production path (`CoverageMatrix.model_validate(...)`), and the test's plain-list
+  mock genuinely can't satisfy it as originally written — both snippets are individually
+  reasonable, they just don't agree with each other. **Fix:** `entries = result.root if
+  isinstance(result, CoverageMatrix) else result` before the list comprehension — accepts
+  either shape, doesn't touch the plan's test, adds one branch. Full worker suite after:
+  28/28 passing, `coverage_analyzer.py` at 100%.
+- Confirmed the framework-warning text (`"No supported test framework detected; results may be
+  incomplete"`) matches design.md §13's Error Handling table verbatim (plan.md's snippet adds
+  a trailing period; trivial, not changed).
 
 ---
 
