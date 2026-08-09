@@ -22,21 +22,18 @@ Update this after each phase (or whenever something worth remembering happens).
 **Phase:** 0 (complete, merged) → 1 (Tasks 2–8, complete, merged to `main`) → 2
 (`backend/shared`, Task 9, complete, merged to `main`) → 3 (`backend/worker`, Tasks 10–17,
 complete, merged to `main` via PR #12) → 4 (`backend/api`, Tasks 18–22, complete, merged to
-`main` via PR #13) → 5 (`frontend`, Tasks 23–26) — **all 4 tasks (23–26) complete on
-`feature/phase-5-frontend`, pushed to `origin`, not yet merged (user will open/merge the PR
-themselves). `frontend/index.html` (a plan gap — no task created it) added out-of-band per the
-user's decision; `npm run build` and the `frontend/Dockerfile` (built + run + curl-verified) are
-both fully green end-to-end. Phase 5 self-check run (see entry below) — decision: skip a
-dedicated health check (risk profile much smaller than Phase 3/4's), close the one flagged gap
-(no `<App />`-level routing integration test) as targeted insurance instead — done, see the
-"Decision" note at the end of the Phase 5 section.**
+`main` via PR #13) → 5 (`frontend`, Tasks 23–26, complete, merged to `main` via PR #14) → 6
+(`terraform`, Tasks 27–31) — **Task 27 (`networking` module + `shared` environment scaffolding)
+complete on `feature/phase-6-terraform`, not yet pushed/merged. Pre-work re-verified the
+GitHub-auth follow-up empirically (env var alone is insufficient; see the Open Questions entry)
+before starting. `terraform init && terraform validate` both green for the `shared` root; no
+`apply` run (real AWS spend is out of scope until Task 31's documented apply order).**
 **Branch pattern in use:** `feature/phase-<N>-<short-description>`, one PR per phase (docs-only
 housekeeping like this entry uses `docs/<short-description>` instead)
-**Current branch:** `feature/phase-5-frontend` (cut fresh from `main` after confirming PR #13
-merged; local `main` was stale again — see note below, same class of issue as the Phase 4
-session-start correction).
-**Last merged:** Phase 4 (Tasks 18–22, `backend/api`) → `main` via PR #13
-(2026-08-09T19:10:18Z).
+**Current branch:** `feature/phase-6-terraform` (cut fresh from `main` after confirming PR #14
+merged; local `main` was stale again by 14 commits — see the Phase 6 pre-work entry below, same
+class of issue as every prior phase's session-start correction).
+**Last merged:** Phase 5 (Tasks 23–26, `frontend`) → `main` via PR #14 (2026-08-09T19:59:40Z).
 **Session-start correction:** local `main` was behind `origin/main` by 13 commits (the PR #13
 merge happened upstream but hadn't been fetched locally). Confirmed via `gh pr list` (PR #13
 shown MERGED) before trusting it, then `git fetch origin` + `git checkout main` +
@@ -1257,6 +1254,79 @@ cases, no duplication of each page's own already-existing coverage.
   more before push, per the user's ask): `backend/worker` 38/38, `backend/shared` 12/12,
   `backend/api` 16/16, `mcp-server` 17/17 — all unchanged.
 - No credential/secret handling, no new dependencies.
+
+---
+
+### Phase 6 — Terraform — Task 27 (`networking` module + `shared` environment scaffolding) ✅ complete
+
+- Branch: `feature/phase-6-terraform`, cut from `main` after confirming PR #14 (Phase 5) merged
+  (local `main` was 14 commits behind `origin/main`, same stale-clone pattern as every prior
+  phase — confirmed via `gh pr list` before trusting it, then `git fetch` + `git pull --ff-only`,
+  `ffde7be` → `84c7536`).
+- **Pre-work (before Task 27): re-verified the GitHub-auth follow-up empirically instead of
+  trusting the existing log entry's wording.** Confirmed Phase 6 (Tasks 27–31) has no GitHub/MCP
+  scope at all, and live-tested `ghcr.io/github/github-mcp-server:latest` (`v1.8.0`) directly:
+  `GITHUB_PERSONAL_ACCESS_TOKEN` set in the container's own environment does **not** satisfy HTTP
+  mode's auth — an unauthenticated request still gets `401` with a
+  `WWW-Authenticate: Bearer resource_metadata=...` challenge; a request with a real
+  `Authorization: Bearer` header succeeds. Conclusion: a token-injecting sidecar/gateway is
+  genuinely needed and remains **explicitly unscheduled** (not assigned to Phase 6 or 7). Full
+  evidence and the corrected Open Questions entry are below; committed alone
+  (`3d369ac docs: correct project-log's GitHub-auth follow-up...`) before starting Task 27 itself.
+- **Task 27 ✅**, implemented from plan.md with two syntax fixes (both confirmed empirically via
+  `terraform init`, not just by inspection) and one plan-gap fill:
+  1. **Real, confirmed bug: the plan's `main.tf` snippet writes the security group's
+     `ingress`/`egress` blocks as semicolon-separated single lines**
+     (`ingress { description = "..."; from_port = 22; ... }`) — this is invalid HCL. Confirmed
+     empirically: ran `terraform init` against the literal snippet first, got
+     `Error: Invalid character` / `Error: Invalid single-argument block definition` pointing at
+     line 35. Fixed by expanding each `ingress`/`egress` block to one argument per line (standard
+     HCL block syntax) — same six blocks, same argument values, no semantic change.
+  2. **Real, confirmed bug: the plan's `variables.tf` snippets use comma-separated single-line
+     variable blocks** (`variable "admin_cidr" { type = string, description = "..." }`,
+     and `shared/variables.tf`'s `aws_region` the same way) — also invalid HCL (`Error: Invalid
+     single-argument block definition`, same class of error as #1). Fixed the same way — one
+     argument per line, values unchanged. Both bugs are the same underlying mistake (the plan's
+     condensed one-line presentation isn't valid Terraform syntax, only valid-looking shorthand),
+     not two independent issues.
+  3. **Plan gap, flagged rather than silently filled: `terraform/environments/shared/backend.tf`
+     is listed in Task 27's Files list but no task anywhere in plan.md shows its content** —
+     grepped the full plan and design.md for `backend.tf`/`backend "s3"`/`tfstate`; the only hits
+     are Task 30's `dev`/`prod` `main.tf`, which reads `shared`'s state via
+     `terraform_remote_state` with `backend = "local"` (Terraform's implicit default when no
+     `backend` block is configured — needs no file content to work) and a comment
+     (`# or "s3" with a real backend config — see backend.tf`) that treats `backend.tf` as a
+     reserved-but-unused location for a future remote backend, never actually defining one.
+     Task 31's own validation command (`terraform init -backend=false`) forces local state
+     regardless, so this file's content has no effect on anything the plan itself checks. Filled
+     it with a comment-only placeholder documenting exactly this (local state is the default;
+     file reserved for a future `backend "s3"` block) — inert, zero effect on `init`/`validate`,
+     easy to replace later if remote state is adopted. Not a stop-and-ask case per CLAUDE.md's
+     dependency-version-bump carve-out (nothing to approve, no version change) — flagged here per
+     the "explain, don't silently make" rule instead.
+  4. **Not a bug, not fixed:** `shared/main.tf`'s `provider "aws" {}` block has no matching
+     `required_providers.aws` entry (only `random`/`tls`/`local` are declared) — this is the
+     plan's own literal text, and Terraform's implicit-provider inference from the `aws_*`
+     resource-type prefix handles it fine; `terraform init` resolved `hashicorp/aws v6.58.0`
+     (latest, unconstrained) alongside `random v3.9.0`/`tls v4.3.0`/`local v2.9.0` (all satisfying
+     their `~>` constraints). Flagging only because an unconstrained provider can resolve to a
+     different version on a future `init` — not a version bump I made or am asking to make, just
+     the plan's as-written behavior, worth knowing about before Task 28 adds `ec2` resources on
+     top of it.
+  - **Validation:** `cd terraform/environments/shared && terraform init && terraform validate` —
+    `Success! The configuration is valid.` (re-run clean from a fresh `.terraform`/lock-file
+    state to confirm it isn't order-dependent). No `terraform apply` run — out of scope per the
+    plan (Task 31 documents the real apply order; that's a real-AWS-spend action requiring
+    explicit confirmation first).
+  - `terraform fmt -recursive -check -diff` (run informationally, not required by this task) flags
+    one cosmetic misalignment in `aws_subnet.public`'s `=` columns — present verbatim in the
+    plan's own snippet, left as-is since Task 31 is explicitly the task that runs `fmt` across the
+    whole tree.
+  - `.gitignore` already covers `.terraform/`, `terraform.tfstate*`, and `*.pem` — no changes
+    needed there for this task. `.terraform.lock.hcl` is committed (Terraform's own
+    recommendation), `.terraform/`'s downloaded provider binaries are not (already gitignored).
+  - No credential/secret handling — this task never touches the GitHub-auth question at all
+    (that's Task 28+/Phase 7 territory); no AWS credentials were used since no `apply` ran.
 
 ---
 
