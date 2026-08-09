@@ -21,25 +21,44 @@ Update this after each phase (or whenever something worth remembering happens).
 
 **Phase:** 0 (complete, merged) → 1 (Tasks 2–8, complete, merged to `main`) → 2
 (`backend/shared`, Task 9, complete, merged to `main`) → 3 (`backend/worker`, Tasks 10–17,
-complete, merged to `main` via PR #12) → 4 (`backend/api`, Tasks 18–22) — **all 5 tasks (18–22)
-complete on `feature/phase-4-backend-api`. Phase 4 health check run (see entry below) — verdict:
-sound and safe to merge from a code-correctness standpoint, not yet merged/pushed. A known,
-deliberately-unresolved architectural gap (GitHub token custody vs. required per-request auth —
-see Task 22 entry and "Open Questions" below) means `POST /api/analyses/{id}/github-issue` will
-not actually work against the real `mcp-github` server as currently designed; this is tracked as
-its own follow-up, not a blocker for merging Phase 4's code.**
+complete, merged to `main` via PR #12) → 4 (`backend/api`, Tasks 18–22, complete, merged to
+`main` via PR #13) → 5 (`frontend`, Tasks 23–26) — **all 4 tasks (23–26) complete on
+`feature/phase-5-frontend`, pushed to `origin`, not yet merged (user will open/merge the PR
+themselves). `frontend/index.html` (a plan gap — no task created it) added out-of-band per the
+user's decision; `npm run build` and the `frontend/Dockerfile` (built + run + curl-verified) are
+both fully green end-to-end. Phase 5 self-check run (see entry below) — decision: skip a
+dedicated health check (risk profile much smaller than Phase 3/4's), close the one flagged gap
+(no `<App />`-level routing integration test) as targeted insurance instead — done, see the
+"Decision" note at the end of the Phase 5 section.**
 **Branch pattern in use:** `feature/phase-<N>-<short-description>`, one PR per phase (docs-only
 housekeeping like this entry uses `docs/<short-description>` instead)
-**Current branch:** `feature/phase-4-backend-api` (cut fresh from `main` after confirming PR #12
-merged; local `main` was stale — see note below).
-**Last merged:** Phase 3 (Tasks 10–17, `backend/worker`) → `main` via PR #12
-(2026-08-09T18:11:13Z).
-**Session-start correction:** local `main` was 21 commits behind `origin/main` (the PR #12
-merge happened upstream but hadn't been fetched locally) — `git log main` looked like Phase 3
-was still unmerged until `git fetch origin main` + `git pull --ff-only` caught it up. Confirmed
-via `gh pr list` (PR #12 shown MERGED) before trusting it. Flagging per CLAUDE.md's "don't rely
-solely on the log's claims" rule — this wasn't the log being wrong, it was the local clone being
-stale, but the same verify-before-trusting principle applied.
+**Current branch:** `feature/phase-5-frontend` (cut fresh from `main` after confirming PR #13
+merged; local `main` was stale again — see note below, same class of issue as the Phase 4
+session-start correction).
+**Last merged:** Phase 4 (Tasks 18–22, `backend/api`) → `main` via PR #13
+(2026-08-09T19:10:18Z).
+**Session-start correction:** local `main` was behind `origin/main` by 13 commits (the PR #13
+merge happened upstream but hadn't been fetched locally). Confirmed via `gh pr list` (PR #13
+shown MERGED) before trusting it, then `git fetch origin` + `git checkout main` +
+`git pull --ff-only origin main` caught it up (`463479f` → `ffde7be`) before branching Phase 5
+off of it. Same verify-before-trusting principle as the Phase 4 note below, now the second
+occurrence of this exact pattern — worth treating as a standing habit (always `gh pr list` +
+fetch/pull `main` at session start) rather than a one-off.
+**Session-start correction (Phase 4, kept for history):** local `main` was 21 commits behind
+`origin/main` (the PR #12 merge happened upstream but hadn't been fetched locally) — `git log
+main` looked like Phase 3 was still unmerged until `git fetch origin main` + `git pull
+--ff-only` caught it up. Confirmed via `gh pr list` (PR #12 shown MERGED) before trusting it.
+Flagging per CLAUDE.md's "don't rely solely on the log's claims" rule — this wasn't the log
+being wrong, it was the local clone being stale, but the same verify-before-trusting principle
+applied.
+**frontend test suite (Tasks 23–26 + routing smoke test):** 9/9 passing (`npm test` from
+`frontend/`, Vitest, across 6 files) — the pre-existing smoke test, 2 `client.test.ts` cases, 1
+`Home.test.tsx` case, 1 `Results.test.tsx` case, 1 `History.test.tsx` case, and 3
+`App.test.tsx` cases (real-router routing smoke test, added in place of a full Phase 5 health
+check). `npm run build` (`tsc -b && vite build`) is fully green end-to-end; `frontend/Dockerfile`
+builds and serves real HTTP traffic (verified via `docker run` + `curl`). Repo-wide regression
+check: `backend/worker` 38/38, `backend/shared` 12/12, `backend/api` 16/16, `mcp-server` 17/17 —
+all unchanged from Phase 4's baseline.
 **mcp-server test suite:** 17/17 passing, 90% coverage (`--cov=. --cov-report=term-missing`
 from `mcp-server/`), comfortably above the 80% target.
 **backend/shared test suite (Task 9):** 12/12 passing, 100% coverage (`--cov=. --cov-report=term-missing`
@@ -605,7 +624,7 @@ bug could even surface, and it's cheap to double-check now versus after merge.
   and the one finding from the health check is now fixed and verified both by new unit tests
   and by re-running the original empirical reproduction.
 
-### Phase 4 — `backend/api` (FastAPI) — all 5 tasks (18–22) complete, not yet merged
+### Phase 4 — `backend/api` (FastAPI) — all 5 tasks (18–22) complete, merged via PR #13
 
 - Branch: `feature/phase-4-backend-api`, cut from `main` after confirming PR #12 (Phase 3)
   merged (see Current State note above re: stale local `main`).
@@ -988,6 +1007,257 @@ the same reasoning Phase 3's own health-check recommendation gave.
   own explicitly-scheduled follow-up (flagged in "Open Questions" below) rather than blocking
   this merge on an infrastructure phase that hasn't started yet.
 
+### Phase 5 — `frontend` (React) — Tasks 23–26 ✅ complete (all 4 tasks)
+
+- Branch: `feature/phase-5-frontend`, cut from `main` after confirming PR #13 (Phase 4) merged
+  (see Current State note above re: stale local `main`, second occurrence of the same pattern
+  as Phase 4's own session-start correction).
+- **Checked project-log for standing findings before starting, per the user's explicit ask —
+  none apply to Task 23:** the app-package-name import collision (Task 18) is Python-packaging-
+  specific (`app` as a top-level module name across `backend/*` services); `frontend/` has no
+  Python package and isn't affected. The DynamoDB GSI-vs-plain-fixture distinction (Tasks 20/21)
+  is backend-only; Task 23 makes no DynamoDB calls at all (it's a pure API-client/routing
+  skeleton, backed by `vi.stubGlobal("fetch", ...)` mocks, not a real backend). The GitHub-auth
+  infra gap (Task 22, still an open follow-up) doesn't apply yet either — `createGithubIssue` in
+  `client.ts` is a thin fetch wrapper with no MCP/GitHub call of its own; the gap only matters
+  once a page actually invokes it against a real deployment (Task 25 or later), not at the
+  client-wrapper level Task 23 builds.
+- **Task 23 (Frontend skeleton — API client, routing, Vitest config) ✅.** TDD: wrote
+  `client.test.ts` first, verified RED (`Failed to resolve import "./client"` — Vite's actual
+  wording for the plan's expected "Cannot find module", same underlying cause, not a concern).
+  - **Real, empirically-confirmed bug in the plan's own literal `client.ts`/`client.test.ts`
+    snippets, found via the mandatory RED→implement→verify-GREEN step, not by inspection:**
+    implementing `request<T>(path: string, options?: RequestInit)` exactly as written and running
+    the `getAnalysis` test (which calls `request` with no `options` arg) failed —
+    `expect(fetch).toHaveBeenCalledWith("/api/analyses/a1", expect.anything())` doesn't match,
+    because `fetch(`${BASE_URL}${path}`, options)` with `options` left `undefined` still passes an
+    explicit second argument (`arguments.length === 2`), and Vitest/Jest's `expect.anything()`
+    explicitly excludes `undefined` (confirmed directly: a throwaway debug test logged the actual
+    captured call args as `["/api/analyses/a1", undefined]`, length 2 — removed after confirming).
+    **Fix:** changed the parameter to `options: RequestInit = {}` (default instead of optional) —
+    one-line change, doesn't touch either test file, `createAnalysis`'s test (which does pass
+    explicit options) is unaffected. Full frontend suite after: 3/3 passing (1 pre-existing smoke
+    test + 2 new).
+  - **Two more real gaps found via `npm run build` (`tsc -b && vite build`) — not part of Task
+    23's own literal verification step (`npm test -- client.test.ts`), but checked anyway per this
+    project's established "run it for real, don't just trust the snippet" discipline:**
+    1. `import.meta.env.VITE_API_BASE_URL` (`client.ts`, straight from the plan's own snippet)
+       doesn't type-check — `tsconfig.json`'s `types` array never included `vite/client`. Fixed
+       directly (config-only change, `vite/client`'s types ship inside the already-installed
+       `vite` devDependency — not a new dependency, so no approval needed). Confirmed the fix by
+       re-running `tsc -b`: the `ImportMeta`/`env` error is gone.
+    2. **Not fixed, flagged instead:** every `.tsx` file fails to type-check
+       (`TS7016: Could not find a declaration file for module 'react'`, etc.) —
+       `frontend/package.json` has never had `@types/react`/`@types/react-dom` in
+       `devDependencies`, since Task 23 is the first task to write real JSX (Phase 0's Task 1 smoke
+       test was plain `.ts`, no JSX). This is a genuine new-dependency addition, not a config fix,
+       so per CLAUDE.md's dependency-approval rule it's left unresolved here rather than
+       `npm install`ed unilaterally. **Does not block Task 23 itself** — `npm test` (Vitest, via
+       esbuild) doesn't need type declarations to run and passes cleanly; it only blocks
+       `npm run build`'s `tsc -b` step, which nothing in Task 23's plan text requires. Will need a
+       decision before Task 36 (CI pipeline, if it type-checks the frontend) or before relying on
+       `npm run build` for anything real.
+  - Housekeeping: removed `frontend/tsconfig.tsbuildinfo`, a `tsc -b` build-cache artifact
+    generated by this session's own verification `npm run build` run (not part of the plan's file
+    list) — added `frontend/*.tsbuildinfo` to `.gitignore` so it doesn't reappear as an untracked
+    file for the next session.
+  - `frontend` suite: 3/3 passing. Repo-wide regression check (Python suites, unaffected by a
+    frontend-only branch — checked anyway, same discipline as every prior phase):
+    `backend/worker` 38/38, `backend/shared` 12/12, `backend/api` 16/16, `mcp-server` 17/17 — all
+    unchanged from Phase 4's baseline.
+  - No credential/secret handling in this task — `createGithubIssue`/`getReport` are thin fetch
+    wrappers with no token of their own; `git diff` scanned clean for secret-shaped strings.
+- **`@types/react`/`@types/react-dom` added, user-approved.** Read the installed React version
+  from `frontend/package.json` and cross-checked against `node_modules/react/package.json` before
+  installing, per the user's explicit ask (both agreed: `18.3.1`) — installed
+  `@types/react@^18`/`@types/react-dom@^18` (resolved to `18.3.31`/`18.3.7`) as `devDependencies`
+  only. `package-lock.json` diff is additive-only (37 insertions, 0 deletions) — no other
+  package's version changed. `npm audit`: 8 pre-existing findings (5 moderate, 2 high, 1
+  critical), all traced individually via `npm audit --json` and `npm ls` — none attributable to
+  the two new packages (their only deps are `@types/prop-types`/`csstype`, neither flagged).
+  `nanoid` is new to the *audit list* since Task 23 but not new to the *tree*: confirmed via
+  `git show HEAD:frontend/package-lock.json` that it was already present (`3.3.16`, transitive via
+  `vite`→`postcss`) before this install — not introduced by it. Full breakdown: `esbuild`/`vite`/
+  `vitest`/`vite-node`/`@vitest/mocker` chain (moderate/high/critical, dev-only) and
+  `react-router`/`react-router-dom` (moderate) are the same categories Phase 0 already accepted as
+  v1 limitations (`nanoid` wasn't itemized in Phase 0's own prose but is part of the same
+  pre-existing `vite` dev-dependency chain) — no new category introduced, `npm audit fix` not run.
+  - **Confirmed genuinely resolving, not silently ignored, per the user's explicit ask:**
+    `tsc -b --explainFiles` shows `vite/client` as an explicit type-library entry point
+    (`Entry point of type library 'vite/client' ... node_modules/vite/client.d.ts`), and a
+    throwaway probe file (`const x: string = import.meta.env.VITE_API_BASE_URL`) compiled with
+    zero errors — removed after confirming.
+  - **`npm run build`'s `tsc -b` step now passes cleanly — no new type errors in Task 23's code**
+    (the `@types/react`/`@types/react-dom` install alone fixed every `TS7016`/`TS7026` finding from
+    before). `vite build` itself still fails, but on a **separate, real, pre-existing plan gap
+    unrelated to this install — flagged, not fixed:** grepped the entire plan document for
+    `index.html` and found none — no task anywhere creates `frontend/index.html`, which Vite
+    requires as its default build entry point (and dev-server entry). This was invisible until now
+    because every prior `npm run build` attempt failed earlier, at the `tsc` step, before ever
+    reaching `vite build`. Not part of Task 23's or Task 24's own file list, so not added here;
+    needs a decision (add a minimal `index.html` now as a small out-of-band fix, or leave it
+    flagged until a task that references frontend serving — Task 34's nginx-ingress or Task 43's
+    local full-stack E2E smoke test — forces the issue).
+- **Task 24 (Home page — repo/issue form) ✅**, implemented verbatim from plan.md — no deviations,
+  no plan bugs found this time (unlike Task 23's `options?: RequestInit`/`expect.anything()`
+  mismatch, the third plan-snippet bug found this project — see Task 23 above, Task 14, and Task
+  20 for the first two classes). RED-verification failed clean (`Unable to find a label with the
+  text of: /repository/i` — stub `Home` has no form elements, exactly as the plan predicted).
+  Two harmless `React Router Future Flag Warning` messages on stderr (v7-migration warnings,
+  informational only, not failures) — noted, not treated as a finding.
+  - `frontend` suite: 4/4 passing (up from Task 23's 3/3). `tsc -b` still passes cleanly (no new
+    type errors from `Home.tsx`/`Home.test.tsx`); `vite build` still blocked by the same
+    pre-existing `index.html` gap noted above, unrelated to this task. Repo-wide regression check:
+    `backend/worker` 38/38, `backend/shared` 12/12, `backend/api` 16/16, `mcp-server` 17/17 — all
+    unchanged.
+  - No credential/secret handling, no new dependencies.
+- **RESOLVED, decision made by the user: `frontend/index.html` added now, out-of-band, same class
+  of fix as the Task 10/20/22 precedents.** Before creating it, verified (per the user's explicit
+  ask) rather than assumed:
+  1. Grepped the *entire* plan for `index.html` — appears exactly once, in Task 34's
+     `frontend/nginx.conf` (`try_files $uri /index.html`), which **serves** the file, not creates
+     it. Confirmed directly that neither Task 34 nor Task 43 (nor any other task) ever creates
+     `frontend/index.html`.
+  2. Confirmed the real entry module path and mount target from the actual repo content, not
+     assumed: `frontend/src/main.tsx` (the only `main.ts*`/`index.ts*` candidate in `src/`) calls
+     `document.getElementById("root")`.
+  3. Created a minimal `frontend/index.html`: doctype, `charset`/`viewport` meta, a plain title,
+     `<div id="root">`, and `<script type="module" src="/src/main.tsx">` — nothing beyond that, no
+     scope creep.
+  4. Verified it actually unblocks both: `npm run build` now produces a real `dist/index.html` +
+     bundled JS (previously failed at `Could not resolve entry module "index.html"`); `npm run dev`
+     booted, served `HTTP 200` at `localhost:5173`, and was stopped cleanly afterward.
+- **Task 25 (Results page — polling, coverage matrix, actions) ✅**, implemented verbatim from
+  plan.md's `Results.tsx` snippet — no deviations there.
+  - **Real, empirically-confirmed plan bug found via the mandatory RED-verification step (the
+    fourth plan-snippet bug found this project — see Task 23's `options?`/`expect.anything()`
+    mismatch above, and Tasks 14/20 in Phase 3/4 for the first two):**
+    `@testing-library/jest-dom` has been a `devDependency` since Task 1 (and its type declarations
+    are in `tsconfig.json`'s `types` array), but **no task, anywhere, ever actually wires it up** —
+    no `setupFiles` entry, no import for its `expect.extend` side effect. Confirmed via a second
+    whole-plan grep (`setupFiles`/`jest-dom`): the only hit is Task 1's own devDependency list
+    line. This stayed invisible through Tasks 23–24 because neither of their tests used a
+    jest-dom-specific matcher (`toBe`/`toHaveBeenCalledWith`/RTL's own queries are enough) — Task
+    25's own literal test snippet is the first to call `toBeInTheDocument()`, and running it
+    exactly as written failed with `Invalid Chai property: toBeInTheDocument`, even though the
+    rendered DOM was already fully correct (confirmed by inspecting the test's own debug output —
+    every expected string was present, the matcher itself just didn't exist). **Fix:** added
+    `frontend/src/setupTests.ts` (one line: `import "@testing-library/jest-dom/vitest"` — the
+    already-installed package's own Vitest-specific auto-extend subpath, not a new dependency) and
+    wired it into `vitest.config.ts`'s `test.setupFiles`. No code/test changes needed beyond that;
+    re-ran `Results.test.tsx` after the fix: clean pass.
+  - Two more harmless `React Router Future Flag Warning` messages on stderr, same as Task 24 —
+    noted, not a finding.
+  - `frontend` suite: 5/5 passing (up from Task 24's 4/4). `npm run build` **now stays green
+    end-to-end** (both `tsc -b` and `vite build`, confirming the `index.html` fix above holds under
+    a second, independent task). Repo-wide regression check: `backend/worker` 38/38,
+    `backend/shared` 12/12, `backend/api` 16/16, `mcp-server` 17/17 — all unchanged.
+  - No credential/secret handling — `createGithubIssue`'s call site in `Results.tsx` still carries
+    no token of its own (same as Task 23's client wrapper); the GitHub-auth infra gap (Task 22,
+    still open) applies once this button is used against a real deployment, not to anything added
+    in this task's own code.
+- **Task 26 (History page) ✅**, implemented verbatim from plan.md — no deviations, no plan bugs
+  found (unlike Tasks 23's/25's). RED-verification failed clean (stub `History` renders nothing
+  matching). `frontend` suite: 6/6 passing (up from Task 25's 5/5).
+  - **Step 7/8, `frontend/Dockerfile` (multi-stage, nginx) — verified for real, same discipline as
+    Tasks 17/22, not just written and trusted:** `docker build -f frontend/Dockerfile .` (repo-root
+    context, matching `backend/worker`'s/`backend/api`'s established convention) succeeded; then
+    `docker run` + `curl` against the live container confirmed nginx actually serves the built
+    bundle (`HTTP 200`, real `index.html` with the correct hashed script tag) — proves the Task
+    23/25 `index.html` fix holds *inside the container* too, not just local dev. Verification
+    image/container removed after confirming.
+  - **Observation, not a plan bug (the build succeeded as written, nothing the plan requires
+    failed) — noted for the record only:** the Dockerfile's Step 7 text copies only
+    `frontend/package.json` into the build stage, not `frontend/package-lock.json`, so
+    `RUN npm install` inside the image re-resolves versions independently rather than reproducing
+    the checked-in lockfile. Confirmed this actually causes drift, not just a theoretical
+    possibility: the container build's own `npm install` log reported **7** `npm audit` findings
+    where the host (lockfile-resolved) `npm audit` reports **8** — different dependency
+    resolution, not a copy-paste discrepancy. Doesn't fail anything the plan's own steps check for,
+    so not fixed here (would mean deviating from Step 7's literal `COPY frontend/package.json .`),
+    but worth knowing before Task 32/37/38 build this image for real deployment: image contents
+    aren't guaranteed to exactly match what `npm test`/`npm run build` verified locally.
+  - `npm run build` still fully green end-to-end. Repo-wide regression check: `backend/worker`
+    38/38, `backend/shared` 12/12, `backend/api` 16/16, `mcp-server` 17/17 — all unchanged.
+  - No credential/secret handling, no new dependencies.
+
+**Phase 5 self-check (post-Task 26, before push/merge):**
+- Grepped `frontend/src/`, `index.html`, `Dockerfile`, `vitest.config.ts`, `tsconfig.json`,
+  `package.json` for `TODO`/`FIXME`/`XXX`/`HACK` markers, `console.log`/`console.debug`/
+  `console.warn`/`console.error`/`debugger` statements, and secret-shaped strings
+  (`ghp_`/`github_pat_`/`AWS_SECRET`/inline `api_key=`/`token=` literals) — **all clean, zero
+  hits.** No `.env`/`.env*` files anywhere under `frontend/`. No leftover debug/scratch files
+  (this session's own throwaway debug tests and probe files were removed immediately after each
+  one confirmed its finding, per the same hygiene precedent as Phase 4's health check).
+- **File-state audit:** `git diff --stat main...feature/phase-5-frontend` shows exactly 20 files
+  changed — all Phase 5 scope (the 4 tasks' page/test files, `api/client.ts`/`types.ts`,
+  `App.tsx`/`main.tsx`, `index.html`, `Dockerfile`, `vitest.config.ts`, `setupTests.ts`,
+  `tsconfig.json`, `package.json`/`package-lock.json`, `.gitignore`, this doc) — nothing stray.
+  Working tree clean; no leftover Docker images/containers from this session's verification runs.
+- **Housekeeping correction while checking this doc's own accuracy (per the user's explicit
+  ask):** the Phase 4 section header above still read "not yet merged" even though PR #13 merged
+  it (confirmed at the start of this phase) — fixed to say "merged via PR #13," same class of
+  stale-header fix as Phase 3's own health check made.
+- **This phase found four real bugs in the plan's own literal snippets/setup, all fixed or
+  explicitly flagged, none silent:** Task 23's `options?: RequestInit`/`expect.anything()`
+  mismatch (fixed), the missing `@types/react`/`@types/react-dom` (flagged, then user-approved and
+  added), the missing `frontend/index.html` (flagged, then user-approved and added), and the
+  never-wired `@testing-library/jest-dom` (fixed, no new dependency). All four are documented
+  above in their originating task's entry, with the empirical evidence that confirmed each one
+  before fixing — none applied on inspection alone.
+
+**Is a dedicated Phase 5 health check (matching Phase 3's/4's format) warranted before
+push/merge? No — recommend skipping it, for reasons specific to this phase's shape, not as a
+default:**
+- **Risk profile is fundamentally smaller than Phase 3/4.** Every Phase 5 task is a thin,
+  presentational React component consuming an already-tested `client.ts` wrapper; there's no
+  business logic, no real external service call, no AWS resource, and no credential/auth boundary
+  anywhere in this phase's own code (`fetch` is mocked in every test, and the GitHub-auth gap
+  belongs to `backend/api`'s Task 22, not anything added here). Phase 3's health check mattered
+  because Task 17 wired 16 already-merged nodes together for the first time and found real,
+  state-corrupting bugs (a dropped `AgentState` key, wrong `unittest.mock.patch` targets, live
+  AWS credentials leaking into a subprocess); Phase 4's mattered because of real DynamoDB
+  GSI/dependency/auth gaps with production consequences. Nothing in Phase 5 has that class of
+  blast radius — the worst-case failure mode here is a broken link or a page that shows "Loading…"
+  forever, immediately visible in a browser, not silent data corruption or a security exposure.
+- **The "run it for real" checks a dedicated health check would add were already done, per-task,
+  throughout this phase — not concentrated at the end the way Phase 3/4 did it.** `npm run build`
+  was run after every single task (not just once at the end); the Dockerfile was built *and* run
+  *and* hit with a real `curl` request in this same session, not deferred; the repo-wide Python
+  regression check ran after every task, four times total, not once. A dedicated health check's
+  main value-add over what already happened would be re-running things an extra time to catch
+  flakiness — a much smaller marginal gain here than it was for Phase 3/4's first-time
+  integration risk.
+- **One residual gap worth naming honestly, even though it doesn't change the recommendation:**
+  no test in this phase renders `<App />` itself and exercises real routing between pages — every
+  page test uses its own isolated `MemoryRouter` (per the plan's own literal snippets), so nothing
+  proves `/` → `/analyses/:id` → `/history` navigation actually works end-to-end through the real
+  route table. This is the same *class* of gap Phase 3's Task 17 health check went looking for
+  (isolated unit tests green, nothing proving the wiring), but the consequence here is far
+  smaller (a broken `<Route>` path is immediately obvious the first time anyone opens the app,
+  not a silent state-corruption bug) — flagging it as optional, cheap insurance if extra
+  confidence is wanted (one small `App.test.tsx` rendering `<App />` inside a `MemoryRouter` and
+  clicking through), not a blocker for merging as-is.
+
+**Decision: skip the full health check, close the one flagged gap as targeted insurance
+instead.** Added `frontend/src/App.test.tsx` (3 cases) — renders the real `App` (its actual
+`BrowserRouter`/`Routes` tree, not a re-declared route list) via `window.history.pushState(...)`
++ `render(<App />)`, so the paths exercised are whatever `App.tsx` really has, not a copy that
+could drift from it. Covers: mounts cleanly and renders `Home` at `/`; renders `Results` at
+`/analyses/:id`, confirming the `:id` param reaches `getAnalysis` (mocked, since this is a
+routing check, not a re-test of `Results`' own already-covered rendering logic); renders
+`History` at `/history`. **Sanity-checked that the test actually catches breakage, not just that
+it passes:** temporarily mangled `/analyses/:id` to `/wrong-path/:id` in `App.tsx`, re-ran — the
+new test failed exactly as expected (the `getAnalysis` call never happened, so `waitFor` timed
+out); reverted (`git diff` on the file came back empty afterward, confirming a clean revert) and
+re-ran to confirm green again. Deliberately minimal, per the user's ask — one file, a handful of
+cases, no duplication of each page's own already-existing coverage.
+- `frontend` suite: **9/9 passing** across 6 files (up from Task 26's 6/6 — this test file adds 3
+  cases). `npm run build` still fully green end-to-end. Repo-wide regression check (re-run once
+  more before push, per the user's ask): `backend/worker` 38/38, `backend/shared` 12/12,
+  `backend/api` 16/16, `mcp-server` 17/17 — all unchanged.
+- No credential/secret handling, no new dependencies.
+
 ---
 
 ## Open Questions / Things to Revisit
@@ -1038,3 +1308,21 @@ the same reasoning Phase 3's own health-check recommendation gave.
   `requirement_retriever`'s comments fetch (Task 11) will all 401 against a real `mcp-github`
   deployment, though none of this is visible from any current test suite, all of which pass
   cleanly by design (mocked transport boundary).
+
+- **RESOLVED: `@types/react`/`@types/react-dom` added, user-approved, see the Phase 5 entry
+  above for full detail.** Was: `frontend/package.json` had no `@types/react`/`@types/react-dom`
+  in `devDependencies`, found during Task 23 — the first task to write real `.tsx`/JSX. Fix:
+  installed both at `^18` (matching the confirmed-installed `react@18.3.1`/`react-dom@18.3.1`),
+  `devDependencies` only, no other package version changed. `tsc -b` now passes cleanly.
+
+- **RESOLVED, user decided to add it now: `frontend/index.html` was missing (no task in the plan
+  ever created it).** Full verification steps and detail in the Phase 5 entry above (grepped the
+  whole plan for `index.html` and for `setupFiles`/`jest-dom`, confirmed the real entry
+  module/mount target from the repo, verified both `npm run build` and `npm run dev` boot clean
+  after adding a minimal file). `npm run build` is now fully green end-to-end.
+- **RESOLVED: `@testing-library/jest-dom` was a `devDependency` since Task 1 but never wired up
+  (no `setupFiles`, no import for its `expect.extend` side effect) — found via Task 25's
+  RED-verification (`toBeInTheDocument` → `Invalid Chai property`).** Fixed by adding
+  `frontend/src/setupTests.ts` (imports the already-installed `@testing-library/jest-dom/vitest`
+  subpath — no new dependency) and wiring it into `vitest.config.ts`'s `test.setupFiles`. Full
+  detail in the Task 25 entry above.
