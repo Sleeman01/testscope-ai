@@ -21,8 +21,8 @@ Update this after each phase (or whenever something worth remembering happens).
 
 **Phase:** 0 (complete, merged) → 1 (Tasks 2–8, complete, merged to `main`) → 2
 (`backend/shared`, Task 9, complete, merged to `main`) → 3 (`backend/worker`, Tasks 10–17,
-complete, merged to `main` via PR #12) → 4 (`backend/api`, Tasks 18–22) — **Tasks 18–19
-complete, Tasks 20–22 not started**
+complete, merged to `main` via PR #12) → 4 (`backend/api`, Tasks 18–22) — **Tasks 18–20
+complete, Tasks 21–22 not started**
 **Branch pattern in use:** `feature/phase-<N>-<short-description>`, one PR per phase (docs-only
 housekeeping like this entry uses `docs/<short-description>` instead)
 **Current branch:** `feature/phase-4-backend-api` (cut fresh from `main` after confirming PR #12
@@ -600,7 +600,7 @@ bug could even surface, and it's cheap to double-check now versus after merge.
   and the one finding from the health check is now fixed and verified both by new unit tests
   and by re-running the original empirical reproduction.
 
-### Phase 4 — `backend/api` (FastAPI) — in progress (Tasks 18–19 of 18–22 complete)
+### Phase 4 — `backend/api` (FastAPI) — in progress (Tasks 18–20 of 18–22 complete)
 
 - Branch: `feature/phase-4-backend-api`, cut from `main` after confirming PR #12 (Phase 3)
   merged (see Current State note above re: stale local `main`).
@@ -672,6 +672,50 @@ bug could even surface, and it's cheap to double-check now versus after merge.
     `UP017` (`datetime.UTC` alias) finding — matches the identical `UP017` already left as-is in
     `backend/worker/app/runner.py` (Phase 3), not a new category of issue. Left as-is per that
     precedent.
+- **Task 20 (`GET /api/analyses/{id}` and `GET /api/analyses`) ✅**, TDD.
+  - **RED-verification note:** `test_get_returns_404_for_unknown_id` passed immediately, before
+    any implementation existed — a harmless coincidence (a nonexistent *route* also 404s,
+    indistinguishable at that point from a *record* not found), not the Task 18 app-package
+    collision (checked: no `ModuleNotFoundError`, no `../worker/app/...` in any traceback this
+    task). The other two tests failed cleanly (`404`/`405`, route/method not found) before
+    implementation, and the test still exercises the real lookup-miss code path after
+    implementation — no action needed, noting only for the next session's awareness.
+  - **Real bug found and fixed, deviation from plan.md's literal Step 1 text — flagged, not
+    silently applied:** Step 1 says "Reuses the `client` fixture pattern from
+    `test_create_analysis.py` — copy the fixture verbatim into this file." Doing exactly that
+    and running Step 2 empirically confirmed a real failure beyond the expected one:
+    `test_list_returns_recent_analyses` failed with
+    `botocore.errorfactory.ResourceNotFoundException: Invalid index: recent-index for table:
+    testscope-analyses-test` — `AnalysisStore.list_recent` (Task 9) queries a `recent-index` GSI
+    that the copied fixture's `ddb.create_table(...)` call never creates (it only declares the
+    base `analysis_id` hash key, no `GlobalSecondaryIndexes` at all). This isn't the Task 18
+    collision (no import failure, a genuine AWS/moto error surfaced deep in the FastAPI request
+    stack) and isn't fixable in production code — the GSI has to exist on the test table for the
+    query to succeed. **Fix:** copied the exact table schema (`AttributeDefinitions` for
+    `repository_issue`/`created_at`/`gsi2_pk`, both `repository_issue-index` and `recent-index`
+    GSIs) already established and working in `backend/shared/tests/test_dynamodb.py`'s own
+    `store` fixture, rather than inventing a new schema — same index names/key schemas, proven
+    correct there. Verified this was necessary (not a workaround) by confirming
+    `query_by_repo_issue` also depends on `repository_issue-index`, which the plan's literal
+    fixture likewise never created. No credential/secret handling and no architectural decision
+    involved — purely a test-fixture completeness gap in the plan's own literal instruction.
+  - **Addition beyond plan.md's literal 3-test file list, same precedent as Tasks 11/13/17's
+    proactive coverage-gap closures — flagged, not silent:** the plan's own 3 tests never
+    exercise `list_analyses`'s `repository`+`issue_number` filter branch (lines calling
+    `_store().query_by_repo_issue(...)`), even though it's part of Task 20's own declared
+    interface (`GET /api/analyses?repository=&issue_number=...`). Left uncovered, `analyses.py`
+    sat at 95% (2 lines missed). Added
+    `test_list_filters_by_repository_and_issue_number` (not in the plan's Test file list) to
+    close it — required the GSI fix above to even run, since `query_by_repo_issue` hits
+    `repository_issue-index` the same way `list_recent` hits `recent-index`.
+  - `backend/api` suite: 9/9 passing, **100%** coverage (`--cov=. --cov-report=term-missing`,
+    up from Task 19's 5/5). Repo-wide regression check: `backend/worker` 38/38 (94%),
+    `backend/shared` 12/12 (100%), `mcp-server` 17/17 (90%) — all unchanged.
+  - `ruff check .`: same `I001`/`UP017` categories as Task 19, plus one new `I001` finding at
+    `app/routes/analyses.py:29` — a direct, expected consequence of Step 3's own literal "append
+    below `create_analysis`" instruction placing a second import block mid-file rather than
+    merging it into the top-of-file imports. Same "leave as-is, verbatim from plan.md" precedent,
+    no new category.
 
 ---
 
