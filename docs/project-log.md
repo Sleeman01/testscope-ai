@@ -34,18 +34,20 @@ from `mcp-server/`), comfortably above the 80% target.
 from `backend/shared/`). Re-verified after Task 10's `pyproject.toml` fix (see Phase 3 entry
 below) — still 12/12, 100%; re-verified again via a fresh uninstall/reinstall from outside
 `backend/shared` before starting Task 11 (see Phase 3 entry below).
-**backend/worker test suite (Tasks 10–17, Phase 3 complete):** 36/36 passing (stable across
+**backend/worker test suite (Tasks 10–17, Phase 3 complete):** 38/38 passing (stable across
 repeated runs), 94% overall coverage (`--cov=. --cov-report=term-missing` from
 `backend/worker/`) — every node/client/graph/runner file at 100% except `app/health.py`/
 `app/main.py` (still deliberately untested — see Task 17 entry below) and `app/llm_client.py`
 (deliberately deferred to a stub-LLM E2E path per Task 12's own plan text, and the E2E test
-that exists does exercise it, just not in isolation). `app/runner.py` is 93% (only the
-600s-real-timeout branch itself is impractical to unit test; its exception-handling path
-now has a dedicated fast test). Confirmed via a full state-key audit that every key any node
-writes to `AgentState` is declared in `app/state.py`'s `TypedDict` (was not true before this
-task — see below). `backend/worker/Dockerfile` builds cleanly and its image's module tree/graph
-wiring were verified by actually running `docker build` + `docker run ... python -c "import
-app.main; app.graph.build_graph()..."` inside the built image, not just trusting the snippet.
+that exists does exercise it, just not in isolation). `app/runner.py` is 94% (only the
+600s-real-timeout branch itself is impractical to unit test; its exception-handling paths —
+both the original graph-exception one and the two added by the post-health-check
+job_intake/final-upsert fix — all have dedicated fast tests). Confirmed via a full state-key
+audit that every key any node writes to `AgentState` is declared in `app/state.py`'s
+`TypedDict` (was not true before this task — see below). `backend/worker/Dockerfile` builds
+cleanly and its image's module tree/graph wiring were verified by actually running
+`docker build` + `docker run ... python -c "import app.main; app.graph.build_graph()..."`
+inside the built image, not just trusting the snippet.
 **`backend/worker/pyproject.toml` now has `[tool.pytest.ini_options] testpaths = ["tests"]`**
 (added in Task 13, see entry below) — anyone adding a new `app/nodes/*.py` file in a future
 task should check whether its name collides with pytest's `test_*` discovery glob before
@@ -548,33 +550,48 @@ bug could even surface, and it's cheap to double-check now versus after merge.
   Task 12+" note (Task 12 is done now) to correctly point at Task 18+/Task 22 instead, and to
   clarify that Task 22's `backend/api/app/mcp_client.py` is a separate client that does **not**
   inherit Task 11's `backend/worker` fix — it'll need its own pass against design.md §5.2.
-- **New finding — real, confirmed, not yet fixed:** `run_analysis`'s call to `job_intake`
+- **Finding from the health check — now fixed:** `run_analysis`'s call to `job_intake`
   (before the `try` block) and the final `store.upsert(...)` inside the `finally` block both
-  have **no exception handling** — copied verbatim from plan.md's own Task 17 `runner.py`
+  had **no exception handling** — copied verbatim from plan.md's own Task 17 `runner.py`
   snippet. Confirmed empirically (not just by inspection): forced `job_intake` to hit a real
   `ClientError` (bad table) and watched the exception propagate **uncaught** out of
   `run_analysis`. `main.py`'s poll loop has nothing wrapping `asyncio.run(run_analysis(...))`
   either, so this exception would propagate all the way out of `poll_forever()` and crash the
-  worker process — not just fail the one job. This directly contradicts design.md §4's own
+  worker process — not just fail the one job. This directly contradicted design.md §4's own
   stated intent for Job Intake: *"Malformed message → log, ack, skip (no infinite redrive)."*
   SQS's own redrive policy (3 receives → DLQ) bounds the worst case (this isn't an infinite
-  crash loop), but it still means: (a) unnecessary pod restarts for what should be a
+  crash loop), but it still meant: (a) unnecessary pod restarts for what should be a
   single-job failure, (b) no structured logging of the failure reason beyond the default
-  unhandled-exception traceback, and (c) if the crash happens in the *final* upsert rather
-  than `job_intake` itself, the `AnalysisRecord` is left permanently stuck at `status=running`
+  unhandled-exception traceback, and (c) if the crash happened in the *final* upsert rather
+  than `job_intake` itself, the `AnalysisRecord` was left permanently stuck at `status=running`
   (already written earlier by `job_intake`) with no terminal state ever recorded — a
   user-facing symptom (an analysis that never finishes) worse than a clean `status=failed`.
-  **This is a gap in plan.md's own `runner.py` design, not a deviation introduced by any
-  earlier Phase 3 task — reported here per the user's explicit request to report findings
-  from this health check, not fixed unilaterally.** Not merge-blocking on its own (SQS's
-  redrive bounds the damage, and this exact gap has existed in every worker run since Task 17
-  first landed, not something newly introduced by this health check), but worth a deliberate
-  decision: fix now (wrap `job_intake` and the final upsert in their own try/except, log and
-  return rather than raise) or take as a known follow-up.
-- **Verdict: Phase 3 is otherwise sound and ready to merge.** No regressions anywhere in the
-  repo, all prior fixes (schema, mocking, AWS credentials, test ordering) hold up under
-  repeated runs, and the one new finding is scoped, understood, bounded by SQS's redrive
-  policy, and not something this health check itself introduced.
+  **This was a gap in plan.md's own `runner.py` design, not a deviation introduced by any
+  earlier Phase 3 task.**
+  - **Fix (TDD):** wrapped `job_intake` in its own `try`/`except`, logging via
+    `logger.exception(...)` and returning immediately (no cleanup/final-upsert attempt — there's
+    nothing meaningful to finalize since Job Intake never got to record anything) rather than
+    letting the exception propagate; wrapped the final `store.upsert(...)` in its own
+    `try`/`except` the same way. Introduced `logging` — no prior usage anywhere in this
+    codebase (`backend/`, `mcp-server/`) to match, so this is a new but minimal, standard
+    convention, not a deviation from an established one. Two new tests written first and
+    verified failing against the unfixed code (`test_run_analysis_logs_and_returns_when_job_intake_fails`,
+    `test_run_analysis_logs_and_returns_when_final_upsert_fails` — the latter uses a
+    call-counting `AnalysisStore.upsert` patch so `job_intake`'s own upsert succeeds
+    normally but the *final* one fails, isolating the two code paths), then passing after the
+    fix. Re-ran the exact original empirical reproduction (forcing the real `ClientError`)
+    from the health check and confirmed it now logs the full traceback and returns normally
+    instead of crashing. Full worker suite after: 38/38 passing (stable across 3 repeated
+    runs), 94% coverage, `runner.py` at 94% (only the genuine 600s-timeout branch remains
+    untested, same as before — unchanged, not a new gap). `ruff` flags nothing new on either
+    of the two new `except` blocks — it doesn't treat `except Exception:` followed by
+    `logger.exception(...)` as a "blind except" (`BLE001`), unlike the pre-existing
+    `except: pass` a few lines away, which is still flagged (unchanged, verbatim from plan.md,
+    same "leave as-is" precedent as always).
+- **Verdict: Phase 3 is sound and ready to merge.** No regressions anywhere in the repo, all
+  prior fixes (schema, mocking, AWS credentials, test ordering) hold up under repeated runs,
+  and the one finding from the health check is now fixed and verified both by new unit tests
+  and by re-running the original empirical reproduction.
 
 ---
 
