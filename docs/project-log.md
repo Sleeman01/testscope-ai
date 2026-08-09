@@ -20,7 +20,7 @@ Update this after each phase (or whenever something worth remembering happens).
 ## Current State
 
 **Phase:** 0 (complete, merged) → 1 (Tasks 2–8, complete, merged to `main`) → 2
-(`backend/shared`, Task 9, complete, merged to `main`) → Phase 3 (`backend/worker`, Task 10)
+(`backend/shared`, Task 9, complete, merged to `main`) → 3 (`backend/worker`, Tasks 10–17)
 complete, not yet merged
 **Branch pattern in use:** `feature/phase-<N>-<short-description>`, one PR per phase (docs-only
 housekeeping like this entry uses `docs/<short-description>` instead)
@@ -50,12 +50,14 @@ app.main; app.graph.build_graph()..."` inside the built image, not just trusting
 (added in Task 13, see entry below) — anyone adding a new `app/nodes/*.py` file in a future
 task should check whether its name collides with pytest's `test_*` discovery glob before
 assuming a bare `python -m pytest` run from `backend/worker/` behaves as expected.
-**Read before starting Task 12+:** `docs/2026-07-30-testscope-ai-design.md` §5.2 — the GitHub
-MCP tool-name assumptions there were found wrong during Task 8's live verification (see Phase 1
-entry below); Task 11 (Phase 3 entry below) already redesigned `request_validator`/
-`requirement_retriever` against the substitute-tool table, so Task 12+ can treat
-`app/mcp_clients.py`'s `call_github_tool`/`call_test_mcp_tool` as a settled, correct interface —
-no further §5.2 rework needed at the client layer, only new tool names per node as needed.
+**Read before starting Task 18+ (Phase 4, `backend/api`) or Task 22 specifically:**
+`docs/2026-07-30-testscope-ai-design.md` §5.2 — the GitHub MCP tool-name assumptions there were
+found wrong during Task 8's live verification (see Phase 1 entry below); Task 11 (Phase 3 entry
+below) already redesigned `backend/worker`'s `request_validator`/`requirement_retriever` against
+the substitute-tool table, so `backend/worker/app/mcp_clients.py`'s `call_github_tool`/
+`call_test_mcp_tool` are a settled, correct interface — no further §5.2 rework needed there.
+Task 22 (`backend/api/app/mcp_client.py`) is a separate, not-yet-built client and will need the
+same substitute-tool-table treatment from scratch — it doesn't inherit Task 11's fix.
 
 ---
 
@@ -190,7 +192,7 @@ no further §5.2 rework needed at the client layer, only new tool names per node
   style already present and unfixed in `mcp-server` (36 warnings there) — not a new
   regression, left as-is rather than reformatting away from the plan's literal snippets.
 
-### Phase 3 — `backend/worker` (LangGraph Agent) — Task 10 ✅ complete, 7 tasks remain (11–17)
+### Phase 3 — `backend/worker` (LangGraph Agent) — Tasks 10–17 ✅ complete (all 8 tasks)
 
 - Branch: `feature/phase-3-backend-worker`, cut from `main` after Phase 2's merge.
 - **Task 10 (worker skeleton — `AgentState`, `job_intake` node, health endpoint, poll-loop
@@ -512,6 +514,67 @@ not necessarily because anything else is currently known to be broken — the st
 above found no other schema gaps, and the patch-location audit found no other tests with the
 same mocking mistake — but because Task 17 is the only point in this phase where that class of
 bug could even surface, and it's cheap to double-check now versus after merge.
+
+### Phase 3 health check (post-Task 17, pre-merge) — ✅ run, 1 new finding, not yet fixed
+
+- **Full `backend/worker` suite: 36/36 passing across 3 repeated runs (94% coverage, stable,
+  no flakiness).** Repo-wide regression check: `backend/shared` 12/12 (100%), `backend/api`
+  1/1, `mcp-server` 17/17 (90%) — all unaffected by this branch's changes.
+- **Fresh end-to-end re-read of `graph.py`/`runner.py`, with one new finding (see below).**
+  Re-confirmed the node-ordering and conditional-edge wiring matches design.md §4 exactly, and
+  ran a targeted grep across every node for any *other* place `status="failed"` gets set beyond
+  the three already-gated nodes (`request_validator`, `requirement_retriever`,
+  `requirement_parser`) — none found, so the conditional-edge fix from Task 17 is complete;
+  no other graph-routing gaps exist.
+- **Re-audited every node's state read/write against `AgentState`'s declared schema from
+  scratch (independent of Task 17's own audit) — clean, no gaps.** Incidentally noted:
+  `notes` (`AgentState`/`AnalysisRecord`/the whole request pipeline from the frontend down)
+  is plumbed through every layer but never actually read by any Task 10–17 node — checked
+  the full plan, not just Phase 3, and no task claims to consume it in a prompt. Not a Phase
+  3 defect (nothing crashes or behaves wrong because of it), just an observation for whoever
+  builds Phase 5 (frontend) or revisits prompt design later.
+- **Re-verified the AWS-credential-isolation fix across 3 repeated E2E runs, not just the
+  original one-off confirmation:** every run logged `Found credentials in environment
+  variables` (the fake, injected ones), never `Found credentials in shared credentials file`
+  (the real ones). Did not additionally re-run the *pre-fix* vulnerable version to double-prove
+  the vulnerability would still reproduce without the fix — doing so would mean deliberately
+  risking another real, unmocked AWS call for no real additional confidence, given it was
+  already directly observed once before the fix existed.
+- **`docs/project-log.md` itself was stale in two places, now fixed:** the "Phase:" summary
+  line still said "Phase 3 (`backend/worker`, Task 10) complete" (should've said Tasks 10–17),
+  and the Phase 3 section header still said "Task 10 ✅ complete, 7 tasks remain (11–17)" —
+  both left over from right after Task 10, never updated as Tasks 11–17 landed even though
+  each task's own entry below them was added correctly. Also updated the "Read before starting
+  Task 12+" note (Task 12 is done now) to correctly point at Task 18+/Task 22 instead, and to
+  clarify that Task 22's `backend/api/app/mcp_client.py` is a separate client that does **not**
+  inherit Task 11's `backend/worker` fix — it'll need its own pass against design.md §5.2.
+- **New finding — real, confirmed, not yet fixed:** `run_analysis`'s call to `job_intake`
+  (before the `try` block) and the final `store.upsert(...)` inside the `finally` block both
+  have **no exception handling** — copied verbatim from plan.md's own Task 17 `runner.py`
+  snippet. Confirmed empirically (not just by inspection): forced `job_intake` to hit a real
+  `ClientError` (bad table) and watched the exception propagate **uncaught** out of
+  `run_analysis`. `main.py`'s poll loop has nothing wrapping `asyncio.run(run_analysis(...))`
+  either, so this exception would propagate all the way out of `poll_forever()` and crash the
+  worker process — not just fail the one job. This directly contradicts design.md §4's own
+  stated intent for Job Intake: *"Malformed message → log, ack, skip (no infinite redrive)."*
+  SQS's own redrive policy (3 receives → DLQ) bounds the worst case (this isn't an infinite
+  crash loop), but it still means: (a) unnecessary pod restarts for what should be a
+  single-job failure, (b) no structured logging of the failure reason beyond the default
+  unhandled-exception traceback, and (c) if the crash happens in the *final* upsert rather
+  than `job_intake` itself, the `AnalysisRecord` is left permanently stuck at `status=running`
+  (already written earlier by `job_intake`) with no terminal state ever recorded — a
+  user-facing symptom (an analysis that never finishes) worse than a clean `status=failed`.
+  **This is a gap in plan.md's own `runner.py` design, not a deviation introduced by any
+  earlier Phase 3 task — reported here per the user's explicit request to report findings
+  from this health check, not fixed unilaterally.** Not merge-blocking on its own (SQS's
+  redrive bounds the damage, and this exact gap has existed in every worker run since Task 17
+  first landed, not something newly introduced by this health check), but worth a deliberate
+  decision: fix now (wrap `job_intake` and the final upsert in their own try/except, log and
+  return rather than raise) or take as a known follow-up.
+- **Verdict: Phase 3 is otherwise sound and ready to merge.** No regressions anywhere in the
+  repo, all prior fixes (schema, mocking, AWS credentials, test ordering) hold up under
+  repeated runs, and the one new finding is scoped, understood, bounded by SQS's redrive
+  policy, and not something this health check itself introduced.
 
 ---
 
