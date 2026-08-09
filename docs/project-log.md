@@ -1286,7 +1286,7 @@ cases, no duplication of each page's own already-existing coverage.
   was the right call, just for this more precise reason — not "system Python pollution,"
   but "silent fallback to an unrelated pre-existing toolkit masking a missing venv."
 
-- **KNOWN FOLLOW-UP TASK, not yet scheduled to a phase: `POST /api/analyses/{id}/github-issue`
+- **KNOWN FOLLOW-UP TASK, explicitly unscheduled to any phase: `POST /api/analyses/{id}/github-issue`
   is not functional against the real `mcp-github` server as currently deployed** — confirmed by
   live-testing the real `github-mcp-server` container (HTTP mode), which returns `401
   Unauthorized` without a per-request `Authorization: Bearer <token>` header. `backend/api`
@@ -1298,16 +1298,45 @@ cases, no duplication of each page's own already-existing coverage.
   `request_validator`'s `search_repositories` call and `requirement_retriever`'s
   `issue_read`/`get_comments` call have the identical missing-Authorization-header problem, never
   caught because every existing test (worker's and `backend/api`'s) mocks the MCP transport
-  boundary rather than hitting a real server. **Needs an infra-layer fix — most likely a
-  sidecar/gateway in front of `mcp-github` that injects the bearer token per request, keeping the
-  raw token out of both `api`'s and `worker`'s own processes — or a deliberate revision of the
-  "Neither reaches api" boundary if token custody is to be extended.** This is squarely a Phase 6
-  (Terraform)/Phase 7 (Kubernetes manifests) concern, not a single backend code task; recommend
-  scheduling it explicitly when those phases start rather than discovering it again later. Until
-  fixed: `POST /api/analyses/{id}/github-issue` (Task 22), `request_validator` (Task 11), and
-  `requirement_retriever`'s comments fetch (Task 11) will all 401 against a real `mcp-github`
-  deployment, though none of this is visible from any current test suite, all of which pass
-  cleanly by design (mocked transport boundary).
+  boundary rather than hitting a real server.
+  - **Phase 6 pre-work (before Task 27) checked this explicitly, rather than assuming the prior
+    phrasing below was still accurate, and re-verified it empirically instead of just re-reading
+    the old finding:** Phase 6 (Tasks 27–31 — Terraform `networking`/`ec2`/`iam`/`s3`/`dynamodb`/
+    `sqs`/`monitoring` modules) has **no GitHub/MCP scope at all** — grepped the full Phase 6 plan
+    text for github/token/bearer/sidecar/gateway; the only hits are unrelated (AWS "internet
+    gateway", the kubeadm bootstrap token). The previous wording here ("squarely a Phase 6/Phase 7
+    concern... recommend scheduling it explicitly when those phases start") was itself
+    speculative and is corrected now: Phase 6 does not touch this at all, and Phase 7's Task 33
+    (`mcp-github` Kubernetes manifests) as currently written does **not** close it either — it
+    only sets `GITHUB_PERSONAL_ACCESS_TOKEN` as a container-level env var on the `mcp-github`
+    Deployment, which is a different thing from a per-request inbound `Authorization` header.
+  - **Re-verified live against the same image/version this finding originally used**
+    (`ghcr.io/github/github-mcp-server:latest`, `v1.8.0`, digest
+    `sha256:d5a18c04b92714c309eb46a2305087e91a4dbd80420f6e462656699f95093520`): started the
+    container in HTTP mode (`http --port 8100 --listen-host 0.0.0.0`) with
+    `GITHUB_PERSONAL_ACCESS_TOKEN` set in the container's own environment (never printed/logged/
+    committed — sourced from `gh auth token`, referenced by env var name only). A request with no
+    `Authorization` header still returns `401 Unauthorized`
+    (`WWW-Authenticate: Bearer resource_metadata="http://.../.well-known/oauth-protected-resource/mcp"`);
+    the identical request with a valid `Authorization: Bearer <token>` header succeeds
+    (`initialize` + `tools/list` returns 44 tools). Corroborated by `--help` on both subcommands:
+    `http`'s only auth-related flags are OAuth-resource-metadata flags (`--base-url`,
+    `--base-path`, `--scope-challenge`) — no token/PAT flag exists for HTTP mode at all — while
+    `stdio`'s flags (`--app-id`, `--app-private-key-path`, `--oauth-client-id`) are for local
+    single-process auth instead. Per the server's own OAuth-protected-resource design, HTTP mode's
+    env var supplies no inbound-auth exemption; since the unauthenticated call never got past the
+    handshake, no further "does the env var's identity actually work outbound" call was needed to
+    settle the question.
+  - **Conclusion: the env var is not sufficient — a per-request bearer header is still required.**
+    A token-injecting sidecar/gateway in front of `mcp-github` (or a deliberate revision of
+    design.md §9's "Neither reaches `api` or `frontend`" boundary if token custody is to be
+    extended) is genuinely needed to close this gap. **Explicitly unscheduled** — not assigned to
+    Phase 6, Phase 7, or any other phase; whoever picks this up should schedule it deliberately
+    when it's actually designed, not assume an existing phase's plan text already covers it.
+  - Until fixed: `POST /api/analyses/{id}/github-issue` (Task 22), `request_validator`
+    (Task 11), and `requirement_retriever`'s comments fetch (Task 11) will all 401 against a real
+    `mcp-github` deployment, though none of this is visible from any current test suite, all of
+    which pass cleanly by design (mocked transport boundary).
 
 - **RESOLVED: `@types/react`/`@types/react-dom` added, user-approved, see the Phase 5 entry
   above for full detail.** Was: `frontend/package.json` had no `@types/react`/`@types/react-dom`
