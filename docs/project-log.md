@@ -22,8 +22,10 @@ Update this after each phase (or whenever something worth remembering happens).
 **Phase:** 0 (complete, merged) → 1 (Tasks 2–8, complete, merged to `main`) → 2
 (`backend/shared`, Task 9, complete, merged to `main`) → 3 (`backend/worker`, Tasks 10–17,
 complete, merged to `main` via PR #12) → 4 (`backend/api`, Tasks 18–22, complete, merged to
-`main` via PR #13) → 5 (`frontend`, Tasks 23–26) — **Task 23 (API client, routing, page stubs)
-complete on `feature/phase-5-frontend`. Tasks 24–26 not yet started.**
+`main` via PR #13) → 5 (`frontend`, Tasks 23–26) — **Tasks 23 (API client, routing, page stubs)
+and 24 (Home page) complete on `feature/phase-5-frontend`. Tasks 25–26 not yet started. A
+pre-existing, unaddressed plan gap (no task ever creates `frontend/index.html`, so `vite build`
+fails) was found while verifying Task 23's `@types/react` install — see "Open Questions" below.**
 **Branch pattern in use:** `feature/phase-<N>-<short-description>`, one PR per phase (docs-only
 housekeeping like this entry uses `docs/<short-description>` instead)
 **Current branch:** `feature/phase-5-frontend` (cut fresh from `main` after confirming PR #13
@@ -45,10 +47,11 @@ main` looked like Phase 3 was still unmerged until `git fetch origin main` + `gi
 Flagging per CLAUDE.md's "don't rely solely on the log's claims" rule — this wasn't the log
 being wrong, it was the local clone being stale, but the same verify-before-trusting principle
 applied.
-**frontend test suite (Task 23):** 3/3 passing (`npm test` from `frontend/`, Vitest) — the
-pre-existing smoke test plus 2 new `client.test.ts` cases. Repo-wide regression check (Python
-suites, unaffected by this frontend-only branch): `backend/worker` 38/38, `backend/shared`
-12/12, `backend/api` 16/16, `mcp-server` 17/17 — all unchanged from Phase 4's baseline.
+**frontend test suite (Tasks 23–24):** 4/4 passing (`npm test` from `frontend/`, Vitest) — the
+pre-existing smoke test, 2 `client.test.ts` cases, and 1 `Home.test.tsx` case. `tsc -b` passes
+cleanly (post-`@types/react` install); `vite build` still blocked by the missing-`index.html`
+gap noted above. Repo-wide regression check: `backend/worker` 38/38, `backend/shared` 12/12,
+`backend/api` 16/16, `mcp-server` 17/17 — all unchanged from Phase 4's baseline.
 **mcp-server test suite:** 17/17 passing, 90% coverage (`--cov=. --cov-report=term-missing`
 from `mcp-server/`), comfortably above the 80% target.
 **backend/shared test suite (Task 9):** 12/12 passing, 100% coverage (`--cov=. --cov-report=term-missing`
@@ -1057,6 +1060,50 @@ the same reasoning Phase 3's own health-check recommendation gave.
     unchanged from Phase 4's baseline.
   - No credential/secret handling in this task — `createGithubIssue`/`getReport` are thin fetch
     wrappers with no token of their own; `git diff` scanned clean for secret-shaped strings.
+- **`@types/react`/`@types/react-dom` added, user-approved.** Read the installed React version
+  from `frontend/package.json` and cross-checked against `node_modules/react/package.json` before
+  installing, per the user's explicit ask (both agreed: `18.3.1`) — installed
+  `@types/react@^18`/`@types/react-dom@^18` (resolved to `18.3.31`/`18.3.7`) as `devDependencies`
+  only. `package-lock.json` diff is additive-only (37 insertions, 0 deletions) — no other
+  package's version changed. `npm audit`: 8 pre-existing findings (5 moderate, 2 high, 1
+  critical), all traced individually via `npm audit --json` and `npm ls` — none attributable to
+  the two new packages (their only deps are `@types/prop-types`/`csstype`, neither flagged).
+  `nanoid` is new to the *audit list* since Task 23 but not new to the *tree*: confirmed via
+  `git show HEAD:frontend/package-lock.json` that it was already present (`3.3.16`, transitive via
+  `vite`→`postcss`) before this install — not introduced by it. Full breakdown: `esbuild`/`vite`/
+  `vitest`/`vite-node`/`@vitest/mocker` chain (moderate/high/critical, dev-only) and
+  `react-router`/`react-router-dom` (moderate) are the same categories Phase 0 already accepted as
+  v1 limitations (`nanoid` wasn't itemized in Phase 0's own prose but is part of the same
+  pre-existing `vite` dev-dependency chain) — no new category introduced, `npm audit fix` not run.
+  - **Confirmed genuinely resolving, not silently ignored, per the user's explicit ask:**
+    `tsc -b --explainFiles` shows `vite/client` as an explicit type-library entry point
+    (`Entry point of type library 'vite/client' ... node_modules/vite/client.d.ts`), and a
+    throwaway probe file (`const x: string = import.meta.env.VITE_API_BASE_URL`) compiled with
+    zero errors — removed after confirming.
+  - **`npm run build`'s `tsc -b` step now passes cleanly — no new type errors in Task 23's code**
+    (the `@types/react`/`@types/react-dom` install alone fixed every `TS7016`/`TS7026` finding from
+    before). `vite build` itself still fails, but on a **separate, real, pre-existing plan gap
+    unrelated to this install — flagged, not fixed:** grepped the entire plan document for
+    `index.html` and found none — no task anywhere creates `frontend/index.html`, which Vite
+    requires as its default build entry point (and dev-server entry). This was invisible until now
+    because every prior `npm run build` attempt failed earlier, at the `tsc` step, before ever
+    reaching `vite build`. Not part of Task 23's or Task 24's own file list, so not added here;
+    needs a decision (add a minimal `index.html` now as a small out-of-band fix, or leave it
+    flagged until a task that references frontend serving — Task 34's nginx-ingress or Task 43's
+    local full-stack E2E smoke test — forces the issue).
+- **Task 24 (Home page — repo/issue form) ✅**, implemented verbatim from plan.md — no deviations,
+  no plan bugs found this time (unlike Task 23's `options?: RequestInit`/`expect.anything()`
+  mismatch, the third plan-snippet bug found this project — see Task 23 above, Task 14, and Task
+  20 for the first two classes). RED-verification failed clean (`Unable to find a label with the
+  text of: /repository/i` — stub `Home` has no form elements, exactly as the plan predicted).
+  Two harmless `React Router Future Flag Warning` messages on stderr (v7-migration warnings,
+  informational only, not failures) — noted, not treated as a finding.
+  - `frontend` suite: 4/4 passing (up from Task 23's 3/3). `tsc -b` still passes cleanly (no new
+    type errors from `Home.tsx`/`Home.test.tsx`); `vite build` still blocked by the same
+    pre-existing `index.html` gap noted above, unrelated to this task. Repo-wide regression check:
+    `backend/worker` 38/38, `backend/shared` 12/12, `backend/api` 16/16, `mcp-server` 17/17 — all
+    unchanged.
+  - No credential/secret handling, no new dependencies.
 
 ---
 
@@ -1109,14 +1156,21 @@ the same reasoning Phase 3's own health-check recommendation gave.
   deployment, though none of this is visible from any current test suite, all of which pass
   cleanly by design (mocked transport boundary).
 
-- **KNOWN FOLLOW-UP, needs explicit user approval to resolve: `frontend/package.json` has no
-  `@types/react`/`@types/react-dom` in `devDependencies`.** Found during Task 23 (Phase 5) — the
-  first task to write real `.tsx`/JSX (Phase 0's Task 1 smoke test was plain `.ts`). `npm test`
-  (Vitest, esbuild-transformed) doesn't need type declarations and passes cleanly; `npm run
-  build`'s `tsc -b` step fails on every `.tsx` file (`TS7016`, `TS7026`) without them. Not added
-  in this branch — it's a new dependency addition, which CLAUDE.md's standing rule requires
-  explicit approval for before installing, same as any other dependency change. Needs a decision
-  (add `@types/react`/`@types/react-dom` as devDependencies, pinned to match the installed
-  `react@^18.3.1`/`react-dom@^18.3.1` majors) before Task 36 (CI pipeline) if it type-checks the
-  frontend, or before `npm run build` is relied on for anything real (e.g. Task 43's local
-  full-stack E2E smoke test, or a production frontend build).
+- **RESOLVED: `@types/react`/`@types/react-dom` added, user-approved, see the Phase 5 entry
+  above for full detail.** Was: `frontend/package.json` had no `@types/react`/`@types/react-dom`
+  in `devDependencies`, found during Task 23 — the first task to write real `.tsx`/JSX. Fix:
+  installed both at `^18` (matching the confirmed-installed `react@18.3.1`/`react-dom@18.3.1`),
+  `devDependencies` only, no other package version changed. `tsc -b` now passes cleanly.
+
+- **KNOWN FOLLOW-UP, not yet scheduled to a task: `frontend/` has no `index.html`.** Found while
+  confirming `npm run build` passes cleanly after the `@types/react` install above — `tsc -b` now
+  succeeds, but `vite build` fails with `Could not resolve entry module "index.html"`. Grepped the
+  entire plan document: no task, anywhere, creates `frontend/index.html` — Vite requires one by
+  default as both its build entry point and dev-server entry. This was invisible through Tasks
+  23–24 because every earlier `npm run build` attempt failed earlier, at the `tsc` step, before
+  ever reaching `vite build`. Not added unilaterally — it's outside both Task 23's and Task 24's
+  own file lists, and creating one involves a judgment call (title, `<div id="root">`, script tag
+  pointing at `main.tsx`) the plan never specifies. Needs a decision: add a minimal `index.html`
+  now as a small out-of-band fix (cheapest, unblocks `npm run build`/`npm run dev` immediately), or
+  leave it flagged until a task that actually needs frontend serving forces the issue (Task 34's
+  nginx-ingress config, or Task 43's local full-stack `docker-compose` E2E smoke test).
