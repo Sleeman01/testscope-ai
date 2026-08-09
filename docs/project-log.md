@@ -19,24 +19,28 @@ Update this after each phase (or whenever something worth remembering happens).
 
 ## Current State
 
-**Phase:** 0 (complete, merged) → 1 (Tasks 2–8, complete, merged to `main`) → Phase 2
-(`backend/shared`, Task 9) complete, not yet merged
+**Phase:** 0 (complete, merged) → 1 (Tasks 2–8, complete, merged to `main`) → 2
+(`backend/shared`, Task 9, complete, merged to `main`) → Phase 3 (`backend/worker`, Task 10)
+complete, not yet merged
 **Branch pattern in use:** `feature/phase-<N>-<short-description>`, one PR per phase (docs-only
 housekeeping like this entry uses `docs/<short-description>` instead)
-**Current branch:** `feature/phase-2-backend-shared` (cut from `main` after Phase 1's merge;
-not yet merged)
-**Last merged:** Phase 1 (Tasks 2–8, `mcp-test-analysis` server) → `main`. This session found
-`main` already had the Phase 1 merge commit (git log) even though this file's previous
-"Current State" still said "not yet merged" — corrected here per CLAUDE.md's "don't trust the
-log's claims if out of sync with the repo" rule; the merge itself happened outside this session.
+**Current branch:** `feature/phase-3-backend-worker` (cut from `main` after Phase 2's merge;
+not yet merged). Only Task 10 has been done on this branch — do NOT start Task 11 without the
+user's explicit go-ahead (Phase 3 has 8 tasks total, Task 10 through Task 17).
+**Last merged:** Phase 2 (Task 9, `backend/shared`) → `main`.
 **mcp-server test suite:** 17/17 passing, 90% coverage (`--cov=. --cov-report=term-missing`
 from `mcp-server/`), comfortably above the 80% target.
 **backend/shared test suite (Task 9):** 12/12 passing, 100% coverage (`--cov=. --cov-report=term-missing`
-from `backend/shared/`).
-**Read before starting Task 9:** `docs/2026-07-30-testscope-ai-design.md` §5.2 — the GitHub
-MCP tool-name assumptions there were found wrong during Task 8's live verification (see
-Phase 1 entry below); Task 9 itself is unaffected (no GitHub MCP calls), but anyone
-starting Phase 3 (Task 11) or Task 22 must read that section first, not spec's original text.
+from `backend/shared/`). Re-verified after Task 10's `pyproject.toml` fix (see Phase 3 entry
+below) — still 12/12, 100%.
+**backend/worker test suite (Task 10):** 3/3 passing (2 new `test_job_intake.py` + pre-existing
+smoke test), 39% overall coverage (`--cov=. --cov-report=term-missing` from `backend/worker/`)
+— `app/health.py` and `app/main.py` are explicitly untested per Task 10's own plan text ("not
+unit tested here — wired end-to-end in Task 17"), so the low overall % here is expected at this
+point in the phase, not a regression against the 80% CI gate (Task 36, not yet built).
+**Read before starting Task 11 or Task 22:** `docs/2026-07-30-testscope-ai-design.md` §5.2 — the
+GitHub MCP tool-name assumptions there were found wrong during Task 8's live verification (see
+Phase 1 entry below).
 
 ---
 
@@ -170,6 +174,50 @@ starting Phase 3 (Task 11) or Task 22 must read that section first, not spec's o
 - `ruff check .` reports 10 pre-existing import-sort (`I001`) warnings, matching the same
   style already present and unfixed in `mcp-server` (36 warnings there) — not a new
   regression, left as-is rather than reformatting away from the plan's literal snippets.
+
+### Phase 3 — `backend/worker` (LangGraph Agent) — Task 10 ✅ complete, 7 tasks remain (11–17)
+
+- Branch: `feature/phase-3-backend-worker`, cut from `main` after Phase 2's merge.
+- **Task 10 (worker skeleton — `AgentState`, `job_intake` node, health endpoint, poll-loop
+  skeleton) ✅**, TDD: one failing `test_job_intake.py` (verified `ModuleNotFoundError`) →
+  `app/state.py` + `app/nodes/job_intake.py` implemented verbatim from plan.md → 2/2 passing.
+  `app/health.py`/`app/main.py` added as unit-untested skeleton per the plan's own Step 5 text
+  (explicitly deferred to Task 17's E2E wiring). Full worker suite: 3/3 passing.
+- **Blocker found and fixed (deviation, not in Task 10's literal file list) —
+  `backend/shared`'s editable install was silently broken:** `pip install -e ../shared` from
+  `backend/worker` succeeded with **zero errors** but produced an **empty module mapping** in
+  the generated `__editable___testscope_shared_*_finder.py` — none of `config`/`dynamodb`/
+  `models`/`s3`/`sqs` were actually importable outside `backend/shared`'s own directory.
+  Root cause: `backend/shared/pyproject.toml` has no `[tool.setuptools]` package-discovery
+  config, and setuptools' flat-layout auto-discovery can't disambiguate 5 top-level `.py`
+  modules on its own — it silently discovers nothing rather than erroring (confirmed via a
+  direct `pip install -e ../shared[dev]` rebuild, which *did* error explicitly:
+  `Multiple top-level modules discovered in a flat-layout`). Task 9's own test suite never
+  caught this because `python -m pytest` run from inside `backend/shared/` resolves imports
+  via the cwd, not the installed package — so 100% coverage there gave false confidence.
+  **Fix:** added `[tool.setuptools]\npy-modules = ["config", "dynamodb", "models", "s3", "sqs"]`
+  to `backend/shared/pyproject.toml`, reinstalled, confirmed the finder's `MAPPING` populates
+  correctly and `import dynamodb`/`models`/etc. now work from `backend/worker` (and from
+  outside `backend/shared` generally). Re-ran `backend/shared`'s own suite afterward (still
+  12/12, 100%) plus `backend/api` and `mcp-server` suites (unaffected) to confirm no
+  regression. This was necessary for Task 10's own plan-specified imports
+  (`from dynamodb import AnalysisStore`, `from models import AnalysisRecord`) to work at all
+  — flagged here rather than silently patched, per CLAUDE.md.
+- **Task 10 Step 0 (install wiring), implemented as a separate install step, not a
+  `pyproject.toml` dependency entry:** `backend/worker/pyproject.toml` can't portably declare
+  a relative sibling path in `[project.dependencies]`, and Task 36's own CI workflow text
+  (`pip install -e backend/shared` as a distinct step before `pip install -e "<service>[dev]"`)
+  already establishes this project's convention of a separate install command rather than an
+  embedded path dependency. Added a comment documenting the local dev install order to
+  `backend/worker/pyproject.toml`, added `fastapi`/`uvicorn` to its `dependencies` list (exact
+  versions matching `backend/api`'s existing pins, no bump), and updated the root `README.md`'s
+  worker install line to `pip install -e ../shared && pip install -e ../shared[dev] && pip
+  install -e ".[dev]"` per the plan's literal Step 0 text (both the non-dev and dev extra
+  installs, as written).
+- `ruff check .` on `backend/worker` reports 5 import-sort (`I001`) warnings and 1 `UP017`
+  (`datetime.UTC` alias) warning — all in code copied verbatim from plan.md's own snippets.
+  Left as-is, same precedent as Phase 1/Phase 2's pre-existing `I001` warnings (not a new
+  regression, not worth diverging from the plan's literal snippets over a style-only lint rule).
 
 ---
 
