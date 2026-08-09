@@ -16,3 +16,12 @@ build-backend = "setuptools.build_meta"
 
 [tool.setuptools.packages.find]
 include = ["app*"]
+
+[tool.pytest.ini_options]
+# Task 13 introduces app/nodes/test_search_planner.py, test_file_retriever.py, and
+# test_file_classifier.py — real node modules, not test files, but their names match
+# pytest's default test_*.py discovery glob. Without this, `python -m pytest` (run from
+# backend/worker/, as every task in the plan does) recursively collects them too and
+# tries to run e.g. test_search_planner(state) itself as a test function. Scoping
+# discovery to tests/ only fixes it without renaming the node files plan.md specifies.
+testpaths = ["tests"]
