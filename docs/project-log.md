@@ -25,8 +25,9 @@ complete, not yet merged
 **Branch pattern in use:** `feature/phase-<N>-<short-description>`, one PR per phase (docs-only
 housekeeping like this entry uses `docs/<short-description>` instead)
 **Current branch:** `feature/phase-3-backend-worker` (cut from `main` after Phase 2's merge;
-not yet merged). Tasks 10–15 done on this branch — do NOT start Task 16 without the user's
-explicit go-ahead (Phase 3 has 8 tasks total, Task 10 through Task 17).
+not yet merged). Tasks 10–16 done on this branch — do NOT start Task 17 without the user's
+explicit go-ahead (Phase 3 has 8 tasks total, Task 10 through Task 17; Task 17 is the last one
+— full graph wiring, overall timeout, Report Saver/Cleanup, worker E2E test).
 **Last merged:** Phase 2 (Task 9, `backend/shared`) → `main`.
 **mcp-server test suite:** 17/17 passing, 90% coverage (`--cov=. --cov-report=term-missing`
 from `mcp-server/`), comfortably above the 80% target.
@@ -34,7 +35,7 @@ from `mcp-server/`), comfortably above the 80% target.
 from `backend/shared/`). Re-verified after Task 10's `pyproject.toml` fix (see Phase 3 entry
 below) — still 12/12, 100%; re-verified again via a fresh uninstall/reinstall from outside
 `backend/shared` before starting Task 11 (see Phase 3 entry below).
-**backend/worker test suite (Tasks 10–15):** 30/30 passing, 90% overall coverage
+**backend/worker test suite (Tasks 10–16):** 32/32 passing, 90% overall coverage
 (`--cov=. --cov-report=term-missing` from `backend/worker/`) — every node/client file at 100%
 except `app/health.py`/`app/main.py`/`app/state.py` (Task 10, deferred to Task 17 per the
 plan's own text) and `app/llm_client.py` (Task 12, deferred to the Task 17/E2E stub-LLM test
@@ -377,6 +378,12 @@ no further §5.2 rework needed at the client layer, only new tool names per node
     both classes. `missing_test_recommender.py`'s `MissingTest`/`MissingTests` don't match
     the `Test*` pattern, so no equivalent fix was needed there.
   Full worker suite after: 30/30 passing, no warnings, both new node files at 100% coverage.
+- **Task 16 (Quality Validator node) ✅**, implemented verbatim from plan.md — no deviations.
+  Pure/synchronous, no LLM or MCP calls, so none of the earlier tasks' `call_llm`/env-var/
+  `.root` issues applied. No pytest naming collision either (`quality_validator` doesn't match
+  `test_*`, and the test imports no `Test*`-named classes). Full worker suite: 32/32 passing,
+  `quality_validator.py` at 100% coverage (and has zero `ruff` findings at all — no imports to
+  sort, since it's a self-contained pure function).
 
 ---
 
