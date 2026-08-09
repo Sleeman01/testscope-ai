@@ -47,3 +47,24 @@ def list_analyses(repository: str | None = None, issue_number: int | None = None
         return AnalysisListResponse(analyses=[_to_status_response(r) for r in records], next_cursor=None)
     records, next_cursor = _store().list_recent(limit=limit, cursor=cursor)
     return AnalysisListResponse(analyses=[_to_status_response(r) for r in records], next_cursor=next_cursor)
+
+from s3 import ReportStore
+from app.schemas import ReportResponse
+
+def _report_store() -> ReportStore:
+    return ReportStore(bucket=get_settings().s3_bucket)
+
+@router.get("/{analysis_id}/report", response_model=ReportResponse)
+def get_report(analysis_id: str):
+    record = _store().get(analysis_id)
+    if record is None:
+        raise HTTPException(status_code=404, detail="Analysis not found")
+    if record.status != "completed":
+        raise HTTPException(status_code=409, detail=f"Analysis is {record.status}, report not ready")
+    report_store = _report_store()
+    data = report_store.read_json(record.s3_report_key)
+    return ReportResponse(
+        analysis_id=analysis_id, requirement=data["requirement"], coverage_matrix=data["coverage_matrix"],
+        test_plan=data["test_plan"], missing_tests=data["missing_tests"], tool_call_trace=data["tool_call_trace"],
+        download_url=report_store.presigned_url(record.s3_report_key.replace(".json", ".md")),
+    )
