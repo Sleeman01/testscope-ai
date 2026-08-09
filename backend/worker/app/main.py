@@ -1,7 +1,9 @@
+import asyncio
 import time
 from config import get_settings
 from sqs import JobQueue
 from app.health import start_health_server
+from app.runner import run_analysis
 
 def poll_forever() -> None:
     settings = get_settings()
@@ -10,7 +12,7 @@ def poll_forever() -> None:
     while True:
         jobs = queue.receive_jobs(max_messages=1, wait_seconds=20)
         for job in jobs:
-            # run_analysis(**job["body"]) wired in Task 17
+            asyncio.run(run_analysis(**job["body"]))
             queue.delete_message(job["receipt_handle"])
         if not jobs:
             time.sleep(1)
