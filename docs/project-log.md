@@ -21,8 +21,12 @@ Update this after each phase (or whenever something worth remembering happens).
 
 **Phase:** 0 (complete, merged) → 1 (Tasks 2–8, complete, merged to `main`) → 2
 (`backend/shared`, Task 9, complete, merged to `main`) → 3 (`backend/worker`, Tasks 10–17,
-complete, merged to `main` via PR #12) → 4 (`backend/api`, Tasks 18–22) — **Tasks 18–21
-complete, Task 22 not started**
+complete, merged to `main` via PR #12) → 4 (`backend/api`, Tasks 18–22) — **all 5 tasks (18–22)
+complete on `feature/phase-4-backend-api`, not yet merged. A known, unresolved architectural gap
+(GitHub token custody vs. required per-request auth — see Task 22 entry) means
+`POST /api/analyses/{id}/github-issue` will not actually work against the real `mcp-github`
+server as currently designed. Recommend a Phase 4 health check before merging (see entry
+below), same as Phase 3's.**
 **Branch pattern in use:** `feature/phase-<N>-<short-description>`, one PR per phase (docs-only
 housekeeping like this entry uses `docs/<short-description>` instead)
 **Current branch:** `feature/phase-4-backend-api` (cut fresh from `main` after confirming PR #12
@@ -600,7 +604,7 @@ bug could even surface, and it's cheap to double-check now versus after merge.
   and the one finding from the health check is now fixed and verified both by new unit tests
   and by re-running the original empirical reproduction.
 
-### Phase 4 — `backend/api` (FastAPI) — in progress (Tasks 18–21 of 18–22 complete)
+### Phase 4 — `backend/api` (FastAPI) — all 5 tasks (18–22) complete, not yet merged
 
 - Branch: `feature/phase-4-backend-api`, cut from `main` after confirming PR #12 (Phase 3)
   merged (see Current State note above re: stale local `main`).
@@ -747,6 +751,139 @@ bug could even surface, and it's cheap to double-check now versus after merge.
   - `ruff check .`: same `I001`/`UP017` categories as Tasks 19–20, plus one new `I001` at
     `app/routes/analyses.py:51` — same mid-file "append" import pattern as Task 20's finding, not
     a new category.
+- **Task 22 (`POST /api/analyses/{id}/github-issue`) ✅ — the last Phase 4 task, and by far the
+  one with the most real findings, some fixed, one left open and unresolved.**
+  - **Tool-name staleness, plan-directed (not silent) — same class as Task 11's:** plan.md's own
+    Task 22 text explicitly flags its literal `"create_issue"` snippet as STALE ("Task 8
+    confirmed it doesn't exist; `issue_write(method='create')` is the substitute") and instructs
+    implementing the correction, not the literal code. Implemented `call_github_tool("issue_write",
+    method="create", owner=owner, repo=repo, ...)` accordingly. Cross-checked against
+    design.md §5.2's substitute-tool table directly (not just the plan's inline comment) before
+    trusting it — table entry matches exactly.
+  - **`structured_content` fix applied, same established precedent as Task 11's
+    `mcp_clients.py`:** `backend/api/app/mcp_client.py` parses `content[0].text` as JSON instead
+    of relying on `result.structured_content` (which design.md §5.2 documents as `None` for this
+    server's dict-returning tools) — matches `backend/worker/app/mcp_clients.py`'s
+    already-established, working fix exactly.
+  - **Real verification performed, not assumed, for the plan's explicitly-flagged "unconfirmed"
+    response shape:** design.md §5.2 says `issue_write(method="create")`'s success response
+    shape — specifically whether it returns `html_url` — was never confirmed during Task 8
+    (avoided creating a real GitHub issue, same no-side-effects policy applied again here).
+    Verified without any live API call or credential: extracted the actual installed
+    `ghcr.io/github/github-mcp-server:latest` binary (`docker cp` from a stopped container, no
+    network calls) and grepped its embedded UI bundle for the `issue_write` tool's own
+    first-party React widget (`appName: "github-mcp-server-issue-write"`) — found
+    `let s=e.html_url||e.url||e.URL||"#"` as the primary link the widget renders after a
+    successful create/update, i.e. GitHub's own UI code confirms the response includes
+    `html_url`. This satisfies plan.md's explicit instruction ("must be verified for real (or
+    against the installed image's docs) before Task 22 ships, don't assume") via the "installed
+    image's docs" path, with zero side effects and no token needed. Implemented
+    `result["html_url"]` as the plan's snippet already assumed — no code change needed here,
+    just verification that it's safe to trust.
+  - **Significant finding, NOT resolved — flagged for the user's decision, not silently
+    applied either way:** live-tested the real `github-mcp-server` container's HTTP mode
+    directly (`curl`-equivalent POST to `/mcp` with no `Authorization` header) and got a clean
+    `401 Unauthorized`, confirming design.md §5.2's own documented finding that HTTP mode
+    requires a per-request `Authorization: Bearer <token>` header (the `GITHUB_PERSONAL_ACCESS_TOKEN`
+    env var alone doesn't authenticate requests). **This is in direct, unresolved tension with
+    design.md §9's own explicit secrets boundary: "GitHub token mounted only in
+    `mcp-github`/`mcp-test-analysis`... Neither reaches `api` or `frontend`."** `backend/api`
+    cannot both (a) never hold the GitHub token and (b) send a per-request Bearer token that
+    only it could supply. Also discovered, while investigating this, that **`backend/worker`'s
+    already-merged `call_github_tool`/`_call_once` (Task 11, Phase 3) has the exact same gap** —
+    it never sends an Authorization header either (confirmed by reading
+    `backend/worker/app/mcp_clients.py` in full — no `Authorization`/`Bearer` anywhere in that
+    file; only `requirement_retriever.py`'s *separate* direct-REST body-fetch call sends one).
+    Neither worker's `request_validator`'s `search_repositories` call nor
+    `requirement_retriever`'s `issue_read`/`get_comments` call would authenticate successfully
+    against the real server as currently written — this was never caught before because every
+    existing test (worker's and this session's new `backend/api` ones) mocks the MCP transport
+    boundary (`streamable_http_client`/`ClientSession`), so a missing auth header never surfaces
+    as a test failure, only against a real server. **Implemented Task 22's `mcp_client.py`
+    without an Authorization header, matching both plan.md's own literal snippet and the stated
+    "Neither reaches api" secrets boundary** — this is the more conservative choice (doesn't
+    introduce new credential handling into `api` unilaterally) but means
+    `POST /api/analyses/{id}/github-issue` will currently 401 against the real `mcp-github`
+    server as deployed, same as worker's two MCP-routed GitHub calls would. Resolving this for
+    real needs an infrastructure-level decision (e.g. a sidecar/gateway that injects the bearer
+    token in front of `mcp-github`, keeping the raw token out of `api`'s/`worker`'s own process;
+    or revisiting the "Neither reaches api" boundary) — likely a Phase 6 (Terraform)/Phase 7
+    (k8s) concern, not a single backend task's code change. **Not fixed in this branch; explicitly
+    flagged here and in Current State above for a deliberate decision, not silently worked
+    around either by adding the header (violates the stated boundary) or ignoring the finding.**
+  - **Real bug found and fixed, confirmed empirically via an actual `docker build` + module
+    import check (same verification discipline as Task 17's Dockerfile check) — not just
+    written and trusted:** `backend/api/pyproject.toml` never listed the `mcp` SDK as a
+    dependency (no earlier Phase 4 task needed it; Task 22's `mcp_client.py` is the first). It
+    worked in this session's own `.venv` only because `mcp` was already present there
+    transitively (pulled in by the already-installed `testscope-worker`/`testscope-mcp`
+    packages) — masking the gap completely in local dev. Building the real Docker image and
+    running `python -c "import app.main; import app.mcp_client; ..."` inside it (a clean,
+    isolated environment with only `backend/api`'s own declared dependencies) reproduced a
+    genuine `ModuleNotFoundError: No module named 'mcp'`. **Fixed:** added `"mcp>=2.0,<3.0"` to
+    `backend/api/pyproject.toml`'s dependencies — deliberately matching `mcp-server/pyproject.toml`'s
+    already-corrected pin, **not** `backend/worker/pyproject.toml`'s `"mcp>=1.1"`, since
+    design.md's own SDK version note explicitly documents that unpinned-major-version pin as the
+    root cause of Task 8's breaking-change surprise (`mcp` 1.x → 2.0 changed `FastMCP`,
+    `streamablehttp_client`'s tuple arity, `Tool.inputSchema`, and more) — reusing the
+    already-corrected, narrower pin rather than repeating a known mistake. Re-ran `docker build`
+    + the import check after the fix: clean pass, no errors. Re-ran the full local test suite
+    afterward too (16/16, 100%) to confirm the dependency addition didn't disturb anything.
+  - **No GSI needed for this task's fixture, confirmed by checking what the task's own DB calls
+    require before assuming either Task 20's or Task 21's schema style applied** (per the user's
+    explicit ask) — same as Task 21: only `AnalysisStore.get`/`.upsert` (via the `POST` helper)
+    and a raw `ddb.update_item`, no `list_recent`/`query_by_repo_issue`. Used the plain,
+    GSI-less schema; RED failed clean (`404`/`AttributeError`, both expected-reason failures)
+    confirming this was correct, not another instance of Task 20's gap.
+  - **RED-verification traceback shape checked against the Task 18 collision note at every
+    step** — plain `404`s and one `AttributeError` (attribute not yet defined, since
+    `mcp_client.py` didn't exist yet when the test's `patch(...)` call ran) — no
+    `ModuleNotFoundError`, no `../worker/app/...`, not the collision.
+  - **Credential/secret handling — flagged explicitly, not silently applied:** this is the
+    first task in `backend/api`'s history to touch GitHub-related code at all. As implemented,
+    `backend/api` still holds **zero** credentials (no `GITHUB_TOKEN`, no change to `Settings`)
+    — consistent with design.md §9's stated boundary. The credential-handling question that
+    *is* open is the unresolved auth-header gap above, not anything actually added to `api` in
+    this branch.
+  - **Addition beyond plan.md's literal 2-test file list, same precedent as Tasks
+    11/13/17/20/21:** added `test_returns_404_for_unknown_id` to `test_create_github_issue.py`
+    (the plan's own 2 tests never exercise the "analysis doesn't exist" branch) and a new
+    `tests/test_mcp_client.py` with one transport-boundary test
+    (`test_call_github_tool_parses_json_text_payload_over_the_real_mcp_transport`, mirroring
+    worker's own `test_call_once_parses_json_text_payload_over_the_real_mcp_transport` from
+    Task 11) — the plan's own Step 5 bar ("≥80% coverage on `app/`") was already met at 95%
+    without either addition, but `mcp_client.py`'s real transport/parsing logic was at 0% direct
+    coverage (every route test mocks it at the boundary), the same class of gap this session has
+    consistently closed rather than leaving on the table.
+  - `backend/api` suite: 16/16 passing, **100%** coverage on `app/` (plan's own bar was ≥80%).
+    Repo-wide regression check: `backend/worker` 38/38 (94%), `backend/shared` 12/12 (100%),
+    `mcp-server` 17/17 (90%) — all unchanged.
+  - `ruff check .`: same `I001`/`UP017` categories as Tasks 19–21, plus one new category —
+    `SIM117` (nested `with` statements) in `app/mcp_client.py:7` — confirmed this is **not** a
+    new class of finding by checking `backend/worker/app/mcp_clients.py`, which has the
+    identical nested-`with` transport pattern and the identical, already-unaddressed `SIM117`
+    finding there too. Left as-is, same precedent.
+  - `backend/api/Dockerfile` added (Step 7/8), verified for real: `docker build` succeeded, and
+    `docker run ... python -c "import app.main; import app.mcp_client; import
+    app.routes.analyses; import app.routes.health"` succeeded inside the built image after the
+    `mcp` dependency fix above — full module tree wires up correctly in the actual container,
+    not just the dev `.venv`. Verification image removed after confirming.
+
+**Recommendation: a Phase 4 health check is warranted before merging, same as Phase 3's.**
+Reasoning: (1) there is a real, **unresolved** architectural/credential gap (GitHub token
+custody vs. required per-request Bearer auth) that means the final task's entire feature
+(`POST /api/analyses/{id}/github-issue`) will not work against the real `mcp-github` server as
+currently deployed — this needs a deliberate decision recorded, not to be merged over silently.
+(2) Every Phase 4 task's tests use their own separate `client` fixture with independently
+provisioned (and, per Task 20's finding, sometimes incomplete) AWS resources — nothing in this
+phase exercises the full request lifecycle (create → get → list → report → github-issue) in one
+continuous flow against a single, fully-provisioned table, the way Phase 3's Task 17 E2E test
+did for the worker. (3) This session already found and fixed three real, empirically-confirmed
+gaps that inspection alone would have missed (Task 20's missing GSIs, Task 22's missing `mcp`
+dependency, Task 22's stale tool name) purely by *actually running things* rather than trusting
+snippets — suggesting a dedicated, fresh-eyes pass (matching Phase 3's health-check format) is
+cheap insurance before merging a 5-task, first-ever-build-of-this-service phase, consistent with
+the same reasoning Phase 3's own health-check recommendation gave.
 
 ---
 
