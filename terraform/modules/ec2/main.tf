@@ -65,7 +65,10 @@ resource "aws_instance" "control_plane" {
     kubeadm_token = local.kubeadm_token
   })
 
-  root_block_device { volume_size = 40 }
+  # 30, not the plan's original 40 — this AWS account has an explicit IAM deny policy
+  # ("LimitVolumeSize") blocking any EBS volume over 30GB. Confirmed live via a failed
+  # apply + `aws sts decode-authorization-message`, user-approved deviation.
+  root_block_device { volume_size = 30 }
   tags = { Name = "testscope-k8s-control-plane" }
 }
 
@@ -81,6 +84,9 @@ resource "aws_instance" "worker" {
     control_plane_private_ip = aws_instance.control_plane.private_ip
   })
 
-  root_block_device { volume_size = 40 }
+  # 30, not the plan's original 40 — this AWS account has an explicit IAM deny policy
+  # ("LimitVolumeSize") blocking any EBS volume over 30GB. Confirmed live via a failed
+  # apply + `aws sts decode-authorization-message`, user-approved deviation.
+  root_block_device { volume_size = 30 }
   tags = { Name = "testscope-k8s-worker" }
 }

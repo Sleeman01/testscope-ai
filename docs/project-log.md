@@ -23,10 +23,14 @@ Update this after each phase (or whenever something worth remembering happens).
 (`backend/shared`, Task 9, complete, merged to `main`) → 3 (`backend/worker`, Tasks 10–17,
 complete, merged to `main` via PR #12) → 4 (`backend/api`, Tasks 18–22, complete, merged to
 `main` via PR #13) → 5 (`frontend`, Tasks 23–26, complete, merged to `main` via PR #14) → 6
-(`terraform`, Tasks 27–31) — **Task 27 (`networking` module + `shared` environment scaffolding)
-complete. Task 28 (`ec2` module — kubeadm control-plane + worker) code complete and validated,
-**apply intentionally not run yet** — awaiting explicit user go-ahead on real AWS spend (this
-machine has live, working AWS credentials). Both on `feature/phase-6-terraform`, not yet
+(`terraform`, Tasks 27–31) — **Task 27 complete. Task 28 (`ec2` module) `apply` ran for real
+(after fixing one plan bug and two account-guardrail-driven deviations, both user-approved:
+`t3.medium` not `t3.large`, 30GB not 40GB volumes) and created 2 real EC2 instances — but an
+account-level automated Lambda (`aws-learning-budget-keeper-function`, runs daily at 13:00/21:00
+UTC) stopped both ~10 minutes after launch, before kubeadm could converge. Both instances are
+currently `stopped` (not terminated, not destroyed) — cluster-convergence verification could not
+be completed. **Task 28 is blocked pending the user's decision on how to proceed** — see the
+Phase 6 Task 28 entry below for full detail. Both tasks on `feature/phase-6-terraform`, not yet
 pushed/merged. Pre-work re-verified the GitHub-auth follow-up empirically (env var alone is
 insufficient; see the Open Questions entry) before starting Task 27.**
 **Branch pattern in use:** `feature/phase-<N>-<short-description>`, one PR per phase (docs-only
@@ -1329,7 +1333,7 @@ cases, no duplication of each page's own already-existing coverage.
   - No credential/secret handling — this task never touches the GitHub-auth question at all
     (that's Task 28+/Phase 7 territory); no AWS credentials were used since no `apply` ran.
 
-### Task 28 (`ec2` module — control-plane + worker via kubeadm) — code complete, validated, **apply not yet run — awaiting user go-ahead on real AWS spend**
+### Task 28 (`ec2` module — control-plane + worker via kubeadm) — code complete, `apply` ran, **cluster did NOT converge — instances auto-stopped by an account-level Lambda before kubeadm could finish; blocked pending user decision**
 
 - Created `terraform/modules/ec2/{main,variables,outputs}.tf` +
   `cloud-init-{control-plane,worker}.yaml.tpl`; wired `module "ec2"` into
@@ -1371,17 +1375,74 @@ cases, no duplication of each page's own already-existing coverage.
 - **Validation:** `terraform init && terraform validate` — `Success! The configuration is
   valid.` `terraform fmt -check -diff` (informational only) flags the `module "ec2"` block's
   column alignment, present verbatim in the plan's own snippet — left for Task 31.
-- **Explicitly not run: `terraform plan` or `terraform apply`.** This machine has real, live AWS
-  credentials configured (`~/.aws/credentials`; `aws sts get-caller-identity` resolves to a real
-  account) — per the user's explicit instruction, no command that would touch that account (even
-  a read-only `plan`) runs until the user has seen the exact resource list/cost estimate and
-  given explicit go-ahead. `admin_cidr` also has no default and isn't yet supplied, which would
-  block a non-interactive `plan`/`apply` anyway.
-- Cluster-convergence verification (Step 5: SSH in, confirm both nodes `Ready`, ingress-nginx
-  `hostNetwork` took effect, metrics-server running) **not yet performed** — depends on `apply`
-  actually running first. Will be a separate log entry once that happens.
-- Code committed on `feature/phase-6-terraform` (module + wiring only — no state, no `.pem` key,
-  nothing apply-generated, since nothing has been applied).
+- **`terraform plan -var="admin_cidr=176.229.150.57/32"` reviewed and shown to the user first**
+  (this machine has real, live AWS credentials — `aws sts get-caller-identity` resolves to
+  account `228281126655`) — 15 resources to add, 0 to change, 0 to destroy, security group
+  correctly scoped `admin_cidr` to SSH/6443 only. User confirmed the plan before any `apply` ran.
+- **First `apply` attempt: partial failure, a real plan bug only catchable by the live AWS API.**
+  13 of 15 resources created, then failed on the security group's ingress rules:
+  `from_port (0) and to_port (65535) must both be 0 to use the 'ALL' "-1" protocol!` — the
+  plan's "Cluster-internal" self-referencing rule (`protocol = "-1"`, `from_port = 0`,
+  `to_port = 65535`) violates an AWS API constraint that `terraform validate` has no way to
+  check (it's AWS-side semantics, not HCL/provider schema). No `aws_instance` had been created
+  yet at this point (they depend on the security group's output) — **zero compute billing**
+  during this failure. Fixed `to_port` from `65535` to `0` — semantically identical, since AWS
+  ignores the port range entirely for protocol `-1` (already means "all ports"); this only
+  satisfies the API's validation, doesn't change what the rule allows.
+- **Second `apply` attempt (after the fix): blocked by a real, intentional account guardrail,
+  not a bug.** `403 UnauthorizedOperation` on `ec2:RunInstances`, explicit deny. Decoded via
+  `aws sts decode-authorization-message` (read-only) rather than guessing: an IAM policy named
+  **`DenyLargeInstanceTypes`** blocks `ec2:RunInstances`/`ec2:ModifyInstanceAttribute` for
+  anything outside `{t2,t3,t4g}.{nano,micro,small,medium}` — the plan's `instance_type` default
+  (`t3.large`) is one size above the allowed ceiling. **Flagged to the user rather than silently
+  routed around; user chose `t3.medium`** (largest allowed). Changed `ec2/variables.tf`'s default
+  from `t3.large` to `t3.medium`, with an inline comment recording why. Still zero compute
+  billing at this point (still no `aws_instance` created).
+- **Third `apply` attempt: blocked by a second account guardrail, same pattern.** New explicit
+  deny, this time on the EBS volume resource. Decoded the same way: **`LimitVolumeSize`** denies
+  any EC2 volume over 30GB — the plan's `root_block_device { volume_size = 40 }` exceeds it.
+  Flagged to the user; **user chose 30GB** (the max allowed). Changed both instances'
+  `root_block_device.volume_size` from `40` to `30` in `ec2/main.tf`, with an inline comment.
+- **Fourth `apply` attempt: succeeded.** `Apply complete! Resources: 2 added, 0 changed, 0
+  destroyed.` Real resources created:
+  - `control_plane`: instance `i-06bab93b4c588e5c3`, public IP `3.87.92.4` (at creation time)
+  - `worker`: instance `i-0819b40cfaece6ae4`, public IP `54.242.230.30` (at creation time)
+  - `worker_iam_role_arn`: `arn:aws:iam::228281126655:role/testscope-k8s-worker-role`
+  - `ssh_private_key_path`: `./testscope-k8s-keypair.pem`, confirmed `-rw-------` (0600),
+    owned by the local user, never printed/logged
+  - Both launched `2026-08-09T20:50:3x/5xZ` UTC.
+- **Cluster-convergence verification (Step 5) could NOT be completed — the actual outcome, not
+  "apply succeeded":** while polling `cloud-init status --wait` over SSH on the control-plane,
+  the SSH session was cut and both instances' public IPs disappeared. `describe-instances`
+  showed both **`stopped`** (`Client.UserInitiatedShutdown`). Root-caused via CloudTrail (read-only
+  `aws cloudtrail lookup-events`): an automated Lambda, `aws-learning-budget-keeper-function`
+  (role `LearningBudgetKeeperLambdaRole`), issued `StopInstances` against both instances at
+  **2026-08-09T21:00:5xZ** — roughly **10 minutes after launch**. This Lambda runs on a fixed
+  schedule via EventBridge rule `learning-budget-keeper-schedule`
+  (`cron(0 13,21 * * ? *)` — every day at **13:00 and 21:00 UTC**), confirmed via `aws events
+  list-rules` (read-only). Ten minutes is nowhere near enough time for cloud-init's
+  apt-get-install-through-metrics-server sequence to finish, so **kubeadm never converged** —
+  this is an account-level constraint discovered live, not a code or config defect in Task 28
+  itself. **Not investigated further and not acted on** (no attempt to modify, pause, or route
+  around the Lambda/EventBridge rule — that's the user's account automation and their call).
+- **Current real state (as of this entry): both instances `stopped`, not terminated** — EBS
+  volumes and all other resources intact. Public IPs deallocated (normal AWS behavior for a
+  stopped non-Elastic-IP instance) — the IPs above are now stale. **Operationally important:**
+  simply restarting these two specific stopped instances will *not* re-run cloud-init's
+  `runcmd` — cloud-init treats a stop/start of the same instance-id as "first boot already
+  happened" and will not redo the kubeadm bootstrap, so whatever partial state apt/kubeadm was
+  in when power was cut is what's there now (not a working cluster). A clean redo needs a fresh
+  `terraform destroy`/`apply` cycle (new instance-ids → cloud-init runs fresh), timed to land
+  outside the 13:00/21:00 UTC stop windows.
+- **Billing status at time of writing:** both instances `stopped` → EC2 compute charges paused
+  (AWS does not bill compute time for stopped instances), no public-IPv4 charge (address
+  released). The two 30GB root EBS volumes are still live and still billing their small storage
+  cost (~$4.80/month combined) until the instances are destroyed. Full instance-hour billing
+  would resume immediately if/when the instances are restarted or replaced.
+- Code committed on `feature/phase-6-terraform` — module/wiring fixes (`t3.medium`, `30GB`)
+  included. **This is now blocked pending the user's decision on how to proceed** (retry at a
+  time clear of the 13:00/21:00 UTC windows, investigate the budget-keeper Lambda's exclusion
+  options, or something else) — no further `apply`/`destroy` will run without that direction.
 
 ---
 

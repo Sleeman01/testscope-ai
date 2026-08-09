@@ -63,7 +63,7 @@ resource "aws_security_group" "k8s_cluster" {
   ingress {
     description = "Cluster-internal (etcd, kubelet, scheduler/controller-manager, kubeadm join, Calico BGP/VXLAN)"
     from_port   = 0
-    to_port     = 65535
+    to_port     = 0
     protocol    = "-1"
     self        = true
   }
