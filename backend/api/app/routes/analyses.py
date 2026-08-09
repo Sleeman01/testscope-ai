@@ -68,3 +68,27 @@ def get_report(analysis_id: str):
         test_plan=data["test_plan"], missing_tests=data["missing_tests"], tool_call_trace=data["tool_call_trace"],
         download_url=report_store.presigned_url(record.s3_report_key.replace(".json", ".md")),
     )
+
+from app.mcp_client import call_github_tool
+from app.schemas import GithubIssueResponse
+
+@router.post("/{analysis_id}/github-issue", response_model=GithubIssueResponse)
+async def create_github_issue(analysis_id: str):
+    record = _store().get(analysis_id)
+    if record is None:
+        raise HTTPException(status_code=404, detail="Analysis not found")
+    if record.status != "completed":
+        raise HTTPException(status_code=409, detail=f"Analysis is {record.status}, cannot file issue yet")
+    data = _report_store().read_json(record.s3_report_key)
+    owner, repo = record.repository.split("/", 1)
+    body_lines = ["## Missing Test Coverage (via TestScope AI)", ""]
+    body_lines += [f"- {m['behavior']}" for m in data["missing_tests"]]
+    result = await call_github_tool(
+        "issue_write", method="create", owner=owner, repo=repo,
+        title=f"Missing test coverage for #{record.issue_number}",
+        body="\n".join(body_lines),
+    )
+    issue_url = result["html_url"]
+    record.github_issue_url = issue_url
+    _store().upsert(record)
+    return GithubIssueResponse(github_issue_url=issue_url)
