@@ -21,8 +21,8 @@ Update this after each phase (or whenever something worth remembering happens).
 
 **Phase:** 0 (complete, merged) → 1 (Tasks 2–8, complete, merged to `main`) → 2
 (`backend/shared`, Task 9, complete, merged to `main`) → 3 (`backend/worker`, Tasks 10–17,
-complete, merged to `main` via PR #12) → 4 (`backend/api`, Tasks 18–22) — **Task 18 complete,
-Tasks 19–22 not started**
+complete, merged to `main` via PR #12) → 4 (`backend/api`, Tasks 18–22) — **Tasks 18–19
+complete, Tasks 20–22 not started**
 **Branch pattern in use:** `feature/phase-<N>-<short-description>`, one PR per phase (docs-only
 housekeeping like this entry uses `docs/<short-description>` instead)
 **Current branch:** `feature/phase-4-backend-api` (cut fresh from `main` after confirming PR #12
@@ -600,7 +600,7 @@ bug could even surface, and it's cheap to double-check now versus after merge.
   and the one finding from the health check is now fixed and verified both by new unit tests
   and by re-running the original empirical reproduction.
 
-### Phase 4 — `backend/api` (FastAPI) — in progress (Task 18 of 18–22 complete)
+### Phase 4 — `backend/api` (FastAPI) — in progress (Tasks 18–19 of 18–22 complete)
 
 - Branch: `feature/phase-4-backend-api`, cut from `main` after confirming PR #12 (Phase 3)
   merged (see Current State note above re: stale local `main`).
@@ -643,6 +643,35 @@ bug could even surface, and it's cheap to double-check now versus after merge.
   missing `backend/api` file — e.g. it fails several frames deeper, or the traceback shows
   `../worker/app/...` paths — that's very likely this same collision, not a real regression;
   check the traceback's file paths before assuming the test or feature is broken.
+- **Task 19 (`POST /api/analyses`) ✅**, TDD, implemented verbatim from plan.md — no deviations.
+  RED-verification confirmed clean this time (`404`/`KeyError`, the route simply not existing
+  yet — not the Task 18 app-package collision; checked the traceback shape per that note before
+  trusting it, since this was exactly the scenario flagged to watch for).
+  - **Checked design.md §5.2's substitute-tool table against this task's plan.md snippet before
+    implementing, per the standing Task 8 finding — not applicable here.** Task 19's own code
+    (`app/routes/analyses.py`) makes no GitHub/MCP calls at all; it only touches
+    `AnalysisStore.upsert`/`JobQueue.send_job` (Task 9, `backend/shared`) and enqueues a job for
+    the worker to pick up later. §5.2's stale-tool-name findings only affect Tasks 11/22 (the two
+    GitHub MCP client callers) — confirmed by reading Task 19's plan.md text in full rather than
+    assuming.
+  - **Verified `AnalysisStore.upsert`'s and `JobQueue.send_job`'s real signatures against
+    `backend/shared`'s actual implementation before trusting the plan's snippet** (same
+    precedent as Task 12's Anthropic-SDK check) — both match exactly
+    (`AnalysisStore(table_name=...)`, `.upsert(AnalysisRecord(...))`,
+    `JobQueue(queue_url).send_job(analysis_id, repository, issue_number, notes)`), no staleness
+    found, implemented as literally written.
+  - No credential/secret handling in this task (no MCP/GitHub/Anthropic calls) — nothing to flag
+    on that front.
+  - `backend/api` suite: 5/5 passing, **100%** coverage (`--cov=. --cov-report=term-missing`) —
+    `app/schemas.py` now exercised (was 0% after Task 18, deliberately, since nothing consumed
+    those models yet) via `CreateAnalysisRequest`/`CreateAnalysisResponse`. Repo-wide regression
+    check: `backend/worker` 38/38 (94%), `backend/shared` 12/12 (100%), `mcp-server` 17/17
+    (90%) — all unchanged from Task 18's baseline, unaffected by this branch.
+  - `ruff check .` on the two new/modified files: same `I001` import-sort category already
+    established as "leave as-is, verbatim from plan.md" precedent, plus one new-but-same-class
+    `UP017` (`datetime.UTC` alias) finding — matches the identical `UP017` already left as-is in
+    `backend/worker/app/runner.py` (Phase 3), not a new category of issue. Left as-is per that
+    precedent.
 
 ---
 
