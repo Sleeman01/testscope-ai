@@ -25,9 +25,8 @@ complete, not yet merged
 **Branch pattern in use:** `feature/phase-<N>-<short-description>`, one PR per phase (docs-only
 housekeeping like this entry uses `docs/<short-description>` instead)
 **Current branch:** `feature/phase-3-backend-worker` (cut from `main` after Phase 2's merge;
-not yet merged). Tasks 10–16 done on this branch — do NOT start Task 17 without the user's
-explicit go-ahead (Phase 3 has 8 tasks total, Task 10 through Task 17; Task 17 is the last one
-— full graph wiring, overall timeout, Report Saver/Cleanup, worker E2E test).
+not yet merged). **Phase 3 (Tasks 10–17) is now fully complete on this branch — all 8 tasks
+done, not yet merged. Recommend a Phase 3 health check (see entry below) before merging.**
 **Last merged:** Phase 2 (Task 9, `backend/shared`) → `main`.
 **mcp-server test suite:** 17/17 passing, 90% coverage (`--cov=. --cov-report=term-missing`
 from `mcp-server/`), comfortably above the 80% target.
@@ -35,12 +34,18 @@ from `mcp-server/`), comfortably above the 80% target.
 from `backend/shared/`). Re-verified after Task 10's `pyproject.toml` fix (see Phase 3 entry
 below) — still 12/12, 100%; re-verified again via a fresh uninstall/reinstall from outside
 `backend/shared` before starting Task 11 (see Phase 3 entry below).
-**backend/worker test suite (Tasks 10–16):** 32/32 passing, 90% overall coverage
-(`--cov=. --cov-report=term-missing` from `backend/worker/`) — every node/client file at 100%
-except `app/health.py`/`app/main.py`/`app/state.py` (Task 10, deferred to Task 17 per the
-plan's own text) and `app/llm_client.py` (Task 12, deferred to the Task 17/E2E stub-LLM test
-per the plan's own text — "no dedicated `llm_client` test needed"); not a regression against
-the 80% CI gate (Task 36, not yet built) once those four files are excluded.
+**backend/worker test suite (Tasks 10–17, Phase 3 complete):** 36/36 passing (stable across
+repeated runs), 94% overall coverage (`--cov=. --cov-report=term-missing` from
+`backend/worker/`) — every node/client/graph/runner file at 100% except `app/health.py`/
+`app/main.py` (still deliberately untested — see Task 17 entry below) and `app/llm_client.py`
+(deliberately deferred to a stub-LLM E2E path per Task 12's own plan text, and the E2E test
+that exists does exercise it, just not in isolation). `app/runner.py` is 93% (only the
+600s-real-timeout branch itself is impractical to unit test; its exception-handling path
+now has a dedicated fast test). Confirmed via a full state-key audit that every key any node
+writes to `AgentState` is declared in `app/state.py`'s `TypedDict` (was not true before this
+task — see below). `backend/worker/Dockerfile` builds cleanly and its image's module tree/graph
+wiring were verified by actually running `docker build` + `docker run ... python -c "import
+app.main; app.graph.build_graph()..."` inside the built image, not just trusting the snippet.
 **`backend/worker/pyproject.toml` now has `[tool.pytest.ini_options] testpaths = ["tests"]`**
 (added in Task 13, see entry below) — anyone adding a new `app/nodes/*.py` file in a future
 task should check whether its name collides with pytest's `test_*` discovery glob before
@@ -384,6 +389,129 @@ no further §5.2 rework needed at the client layer, only new tool names per node
   `test_*`, and the test imports no `Test*`-named classes). Full worker suite: 32/32 passing,
   `quality_validator.py` at 100% coverage (and has zero `ruff` findings at all — no imports to
   sort, since it's a self-contained pure function).
+- **Task 17 (Report Saver + Cleanup, overall timeout, full graph wiring, worker E2E test) ✅
+  — the last Phase 3 task, and by far the one with the most real, empirically-confirmed bugs
+  found this phase.** `report_saver.py` implemented verbatim, TDD, 2/2 passing, no issues.
+  Everything downstream of it (graph assembly, the runner, and especially the E2E test) needed
+  real fixes — every one confirmed by actually running the code, not just by inspection:
+  1. **`graph.py`: added a conditional edge after `requirement_retriever`** (plan.md's snippet
+     only has a plain edge there) — a direct, necessary consequence of Task 11's own
+     plan-directed redesign. The plan's *original* `requirement_retriever` never set
+     `status="failed"` (no error handling at all in the stale snippet), so its Task 17 graph
+     wiring never needed to check for it. My Task 11 implementation correctly added a
+     `status="failed"` path for a failed issue-body fetch (per design.md §5.2 and matching
+     `request_validator`'s own pattern) — without this edge, that failure would fall through
+     to `requirement_parser` with `state["issue_body"]` unset, raising `KeyError` instead of
+     failing cleanly. Not tested by a dedicated unit test (the E2E test's happy path doesn't
+     exercise it) — flagged here as a known, reasoned gap rather than over-scoping Task 17
+     further.
+  2. **Real, confirmed bug: `AgentState` (Task 10) never declared `storage_status`, which
+     `report_saver` (Task 17, both from plan.md's own literal snippets) sets.** Discovered by
+     noticing the E2E test's `record.storage_status` always came back `None` regardless of
+     whether the save actually succeeded. Confirmed the root cause with a minimal, standalone
+     LangGraph reproduction: `StateGraph(SomeTypedDict)` silently drops any key a node returns
+     that isn't declared in the schema (verified directly — an extra key set by a node vanished
+     from `ainvoke`'s result). Fixed by adding `storage_status: str | None` to
+     `app/state.py`. Ran a full audit afterward (`state[...] =` writes across every node vs.
+     `AgentState`'s declared fields) confirming this was the *only* gap — nothing else is
+     silently dropped.
+  3. **Real, confirmed bug in the plan's own E2E test snippet: wrong `unittest.mock.patch`
+     targets.** The snippet patches `app.llm_client.call_llm` and `app.mcp_clients.
+     call_github_tool` directly — but every consuming node does `from app.llm_client import
+     call_llm` / `from app.mcp_clients import call_github_tool`, binding its own local
+     reference at import time. Patching the origin module's attribute has no effect on
+     those already-bound names — confirmed by running the plan's snippet as literally
+     written first: real (failing) Anthropic/MCP calls were attempted instead of the stubs.
+     This affects **7 node modules** (5 for `call_llm`, 2 for `call_github_tool`), not just
+     one — the most severe bug found this phase. Fixed by patching each consuming module's
+     own name individually (`app.nodes.requirement_parser.call_llm`,
+     `app.nodes.test_search_planner.call_llm`, etc.) — the same pattern already used
+     correctly in every one of this phase's own unit tests (audited afterward: grepped every
+     `patch(...)` call across `backend/worker/tests/` and confirmed none of Tasks 11–16's own
+     tests made this mistake — it was isolated to plan.md's Task 17 E2E snippet).
+  4. **Tool-name staleness, as plan.md's own comment already flagged and instructed fixing
+     "once Task 11 is built for real":** the E2E stub's `fake_call_github_tool` used
+     `get_repository`/`get_issue`/`get_issue_comments` — none of which Task 11's actual
+     (redesigned) implementation calls. Corrected to `search_repositories` (returns
+     `{"items": [...]}`, not a bare dict) for `request_validator`, and split
+     `requirement_retriever`'s mocking in two: `_fetch_issue_body` (direct REST, returns a
+     bare string) patched separately from `call_github_tool` with `issue_read`/
+     `method="get_comments"` for comments.
+  5. **Real, pre-existing risk found and fixed, not in the plan at all: the E2E test's mcp-server
+     subprocess is a separate OS process, so moto's `mock_aws()` (which only patches boto3
+     within the pytest process) has no effect on it.** `report_saver`'s `save_coverage_report`
+     call crosses into that subprocess and makes a genuinely unmocked `boto3` call. Running the
+     plan's own `conftest.py` snippet as written (`env={**os.environ, ...}`, inheriting the
+     parent environment wholesale) let that subprocess find and use this machine's **real**
+     `~/.aws/credentials` — confirmed directly in the first run's log output
+     (`Found credentials in shared credentials file: ~/.aws/credentials`). **This means running
+     the E2E test as plan.md literally specifies it could make live, unmocked AWS API calls
+     against whatever account this machine's ambient credentials grant access to.** Fixed by
+     stripping all `AWS_*` vars from the subprocess's inherited environment and forcing moto's
+     own documented fake-credential convention (`AWS_ACCESS_KEY_ID=testing`, etc.) instead —
+     confirmed the fix works (log now says `Found credentials in environment variables`, not
+     the credentials file) and added an explicit `assert record.storage_status == "failed"` to
+     the E2E test, proving both that the real (now-guaranteed-to-fail) subprocess save is
+     correctly non-fatal *and* that `storage_status` now actually propagates (bug 2 above).
+     **This was already live before the fix was applied — the very first test run in this
+     session did reach the subprocess with real credentials present.** No confirmation was
+     possible (or attempted) that any real AWS resource was actually written to or modified;
+     given `report_saver`'s save is the *only* AWS-touching call in that subprocess and it
+     targets a table/bucket (`testscope-analyses-test`/`testscope-reports-test`) that likely
+     doesn't exist in whatever account those credentials belong to, the most probable outcome
+     is an access/not-found error, not a successful write — but this could not be verified
+     without inspecting the credentials' actual scope, which was correctly out of reach.
+  6. **`conftest.py`'s `time.sleep(1.0)`** (plan.md's own literal Step 7 snippet) reintroduces
+     a value Task 8's live verification (`mcp-server/tests/test_mcp_integration.py`) already
+     found too short and fixed to `8.0` — applied that already-established fix here too rather
+     than risk a flaky subprocess-not-ready failure.
+  7. **Test-ordering bug introduced by this session's own new `test_runner.py` (see below):**
+     `get_settings()` is `@lru_cache`d process-wide; neither `test_runner.py`'s nor
+     `test_runner_e2e.py`'s env-setting fixture called `get_settings.cache_clear()`. Running
+     the full suite (not just the new file in isolation) surfaced a real
+     `ResourceNotFoundException` — `test_runner.py`'s `DYNAMODB_TABLE="t"` leaked into
+     `test_runner_e2e.py`'s later `run_analysis` call. Fixed both fixtures with the same
+     `cache_clear()`-before-and-after pattern already established in `test_mcp_clients.py`;
+     re-ran the full suite twice afterward to confirm it's not flaky.
+  8. **Addition beyond plan.md's literal Test file list:** added `tests/test_runner.py`
+     (plan.md only lists `test_report_saver.py`/`test_runner_e2e.py` for this task) — a fast,
+     fully-mocked unit test for `run_analysis`'s own exception-handling (a crashed/hung graph
+     still marks the analysis failed and still attempts cleanup), since the E2E test only
+     exercises the happy path and this is Task 17's *entire reason for existing* (the timeout/
+     exception wrapper), left otherwise completely uncovered.
+  9. **`health.py`'s `/health/ready` extension has no literal code snippet in plan.md** — only
+     a textual instruction ("attempt `JobQueue(...)._client.get_queue_attributes(...)` and
+     return 503 on failure, same pattern as Task 19's API readiness check"). Designed it from
+     that instruction (`try`/`except` around the SQS call, `HTTPException(503)` on failure).
+     Noted in code: the referenced pattern actually lives in **Task 18's** (not Task 19's)
+     `backend/api/app/routes/health.py` — a minor plan cross-reference slip, not consequential
+     since Task 18's own check (`get_settings()`, no SQS call) isn't directly copyable anyway.
+     Not unit-tested: `start_health_server` bundles FastAPI app construction with actually
+     starting a uvicorn thread, so testing the route logic in isolation would need refactoring
+     beyond what Task 17 asks for — left as an explicit gap, same as `app/llm_client.py`'s.
+  10. **Dockerfile (Steps 11–12) implemented verbatim and actually verified**, not just
+      written and trusted: ran a real `docker build`, then `docker run` with a Python one-liner
+      importing `app.main`/`app.graph`/`app.runner`/`app.health` and calling `build_graph()`
+      inside the built image, confirming the full module tree and all 11 graph nodes wire up
+      correctly in the actual container (not just in the dev `.venv`). Test image removed
+      after verification.
+  - `ruff check .` on the new/modified files: same `I001`/`BLE001` categories as established
+    precedent, plus a few new-but-still-plan-verbatim findings (`F401` on `graph.py`'s
+    intentionally-unused-but-documented `job_intake` import, `S110`/`UP041` in `runner.py`'s
+    literal `except Exception: pass` cleanup block) — left as-is, consistent with the same
+    "don't diverge from the plan's literal snippets over style-only lint rules" precedent.
+
+**Recommendation: do a Phase 3 health check before merging.** This was the largest and most
+integration-heavy task in the phase (it's the first one to actually wire Tasks 10–16 together
+and run them end-to-end), and it surfaced real bugs that trace back to two *earlier*,
+already-committed tasks (Task 10's `AgentState` schema, Task 11's graph-routing consequence) —
+neither caught by those tasks' own unit tests, only by this task's integration-level testing.
+That pattern (isolated unit tests all green, but a real gap only visible once things are wired
+together) is exactly the kind of thing worth a dedicated look before merging the whole phase,
+not necessarily because anything else is currently known to be broken — the state-key audit
+above found no other schema gaps, and the patch-location audit found no other tests with the
+same mocking mistake — but because Task 17 is the only point in this phase where that class of
+bug could even surface, and it's cheap to double-check now versus after merge.
 
 ---
 
