@@ -21,8 +21,8 @@ Update this after each phase (or whenever something worth remembering happens).
 
 **Phase:** 0 (complete, merged) → 1 (Tasks 2–8, complete, merged to `main`) → 2
 (`backend/shared`, Task 9, complete, merged to `main`) → 3 (`backend/worker`, Tasks 10–17,
-complete, merged to `main` via PR #12) → 4 (`backend/api`, Tasks 18–22) — **Tasks 18–20
-complete, Tasks 21–22 not started**
+complete, merged to `main` via PR #12) → 4 (`backend/api`, Tasks 18–22) — **Tasks 18–21
+complete, Task 22 not started**
 **Branch pattern in use:** `feature/phase-<N>-<short-description>`, one PR per phase (docs-only
 housekeeping like this entry uses `docs/<short-description>` instead)
 **Current branch:** `feature/phase-4-backend-api` (cut fresh from `main` after confirming PR #12
@@ -600,7 +600,7 @@ bug could even surface, and it's cheap to double-check now versus after merge.
   and the one finding from the health check is now fixed and verified both by new unit tests
   and by re-running the original empirical reproduction.
 
-### Phase 4 — `backend/api` (FastAPI) — in progress (Tasks 18–20 of 18–22 complete)
+### Phase 4 — `backend/api` (FastAPI) — in progress (Tasks 18–21 of 18–22 complete)
 
 - Branch: `feature/phase-4-backend-api`, cut from `main` after confirming PR #12 (Phase 3)
   merged (see Current State note above re: stale local `main`).
@@ -716,6 +716,37 @@ bug could even surface, and it's cheap to double-check now versus after merge.
     below `create_analysis`" instruction placing a second import block mid-file rather than
     merging it into the top-of-file imports. Same "leave as-is, verbatim from plan.md" precedent,
     no new category.
+- **Task 21 (`GET /api/analyses/{id}/report`) ✅**, TDD, implemented verbatim from plan.md — no
+  deviations in the implementation itself.
+  - **No GitHub/MCP calls in this task either** (confirmed by reading the full task text before
+    starting, same check as Tasks 19–20) — only `AnalysisStore.get` and `ReportStore.read_json`/
+    `.presigned_url`. Verified both `ReportStore` methods' real signatures in `backend/shared/s3.py`
+    against the plan's snippet before trusting it — exact match, no staleness.
+  - **DynamoDB fixture checked against Task 20's GSI finding before assuming plan.md's literal
+    copy-paste instruction was complete — this time it genuinely was, confirmed empirically, not
+    assumed.** Step 1 says to copy the fixture verbatim from `test_create_analysis.py` (the
+    *original*, GSI-less table schema — not `test_get_and_list_analyses.py`'s fixed one) plus add
+    an S3 bucket. Checked first whether this task's own two tests call anything requiring a GSI:
+    they only exercise `AnalysisStore.get` (`get_item`), `AnalysisStore.upsert` (`put_item`, via
+    the `POST` helper), and a raw `ddb.update_item` — none of which touch `repository_issue-index`
+    or `recent-index`. Implemented the literal instruction as-is and ran Step 2: RED failed clean
+    (`404`, route not found, both tests) — no `ResourceNotFoundException` this time, confirming
+    the GSI-less fixture is genuinely sufficient here, not another instance of Task 20's gap.
+  - RED-verification traceback shape checked against the Task 18 note both times (Step 2 and
+    while diagnosing) — plain `404`s, no `ModuleNotFoundError`, no `../worker/app/...` — not the
+    app-package collision.
+  - No credential/secret handling and no architectural decisions in this task.
+  - **Addition beyond plan.md's literal 2-test file list, same precedent as Tasks 11/13/17/20:**
+    the plan's own two tests never exercise `get_report`'s "analysis doesn't exist" branch, even
+    though Task 21's own **Interfaces** line explicitly declares it ("404 if the analysis itself
+    doesn't exist") — left `analyses.py` at 98% (1 line missed). Added
+    `test_returns_404_for_unknown_id` to close it.
+  - `backend/api` suite: 12/12 passing, **100%** coverage (up from Task 20's 9/9). Repo-wide
+    regression check: `backend/worker` 38/38 (94%), `backend/shared` 12/12 (100%), `mcp-server`
+    17/17 (90%) — all unchanged.
+  - `ruff check .`: same `I001`/`UP017` categories as Tasks 19–20, plus one new `I001` at
+    `app/routes/analyses.py:51` — same mid-file "append" import pattern as Task 20's finding, not
+    a new category.
 
 ---
 
