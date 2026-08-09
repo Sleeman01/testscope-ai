@@ -21,25 +21,34 @@ Update this after each phase (or whenever something worth remembering happens).
 
 **Phase:** 0 (complete, merged) → 1 (Tasks 2–8, complete, merged to `main`) → 2
 (`backend/shared`, Task 9, complete, merged to `main`) → 3 (`backend/worker`, Tasks 10–17,
-complete, merged to `main` via PR #12) → 4 (`backend/api`, Tasks 18–22) — **all 5 tasks (18–22)
-complete on `feature/phase-4-backend-api`. Phase 4 health check run (see entry below) — verdict:
-sound and safe to merge from a code-correctness standpoint, not yet merged/pushed. A known,
-deliberately-unresolved architectural gap (GitHub token custody vs. required per-request auth —
-see Task 22 entry and "Open Questions" below) means `POST /api/analyses/{id}/github-issue` will
-not actually work against the real `mcp-github` server as currently designed; this is tracked as
-its own follow-up, not a blocker for merging Phase 4's code.**
+complete, merged to `main` via PR #12) → 4 (`backend/api`, Tasks 18–22, complete, merged to
+`main` via PR #13) → 5 (`frontend`, Tasks 23–26) — **Task 23 (API client, routing, page stubs)
+complete on `feature/phase-5-frontend`. Tasks 24–26 not yet started.**
 **Branch pattern in use:** `feature/phase-<N>-<short-description>`, one PR per phase (docs-only
 housekeeping like this entry uses `docs/<short-description>` instead)
-**Current branch:** `feature/phase-4-backend-api` (cut fresh from `main` after confirming PR #12
-merged; local `main` was stale — see note below).
-**Last merged:** Phase 3 (Tasks 10–17, `backend/worker`) → `main` via PR #12
-(2026-08-09T18:11:13Z).
-**Session-start correction:** local `main` was 21 commits behind `origin/main` (the PR #12
-merge happened upstream but hadn't been fetched locally) — `git log main` looked like Phase 3
-was still unmerged until `git fetch origin main` + `git pull --ff-only` caught it up. Confirmed
-via `gh pr list` (PR #12 shown MERGED) before trusting it. Flagging per CLAUDE.md's "don't rely
-solely on the log's claims" rule — this wasn't the log being wrong, it was the local clone being
-stale, but the same verify-before-trusting principle applied.
+**Current branch:** `feature/phase-5-frontend` (cut fresh from `main` after confirming PR #13
+merged; local `main` was stale again — see note below, same class of issue as the Phase 4
+session-start correction).
+**Last merged:** Phase 4 (Tasks 18–22, `backend/api`) → `main` via PR #13
+(2026-08-09T19:10:18Z).
+**Session-start correction:** local `main` was behind `origin/main` by 13 commits (the PR #13
+merge happened upstream but hadn't been fetched locally). Confirmed via `gh pr list` (PR #13
+shown MERGED) before trusting it, then `git fetch origin` + `git checkout main` +
+`git pull --ff-only origin main` caught it up (`463479f` → `ffde7be`) before branching Phase 5
+off of it. Same verify-before-trusting principle as the Phase 4 note below, now the second
+occurrence of this exact pattern — worth treating as a standing habit (always `gh pr list` +
+fetch/pull `main` at session start) rather than a one-off.
+**Session-start correction (Phase 4, kept for history):** local `main` was 21 commits behind
+`origin/main` (the PR #12 merge happened upstream but hadn't been fetched locally) — `git log
+main` looked like Phase 3 was still unmerged until `git fetch origin main` + `git pull
+--ff-only` caught it up. Confirmed via `gh pr list` (PR #12 shown MERGED) before trusting it.
+Flagging per CLAUDE.md's "don't rely solely on the log's claims" rule — this wasn't the log
+being wrong, it was the local clone being stale, but the same verify-before-trusting principle
+applied.
+**frontend test suite (Task 23):** 3/3 passing (`npm test` from `frontend/`, Vitest) — the
+pre-existing smoke test plus 2 new `client.test.ts` cases. Repo-wide regression check (Python
+suites, unaffected by this frontend-only branch): `backend/worker` 38/38, `backend/shared`
+12/12, `backend/api` 16/16, `mcp-server` 17/17 — all unchanged from Phase 4's baseline.
 **mcp-server test suite:** 17/17 passing, 90% coverage (`--cov=. --cov-report=term-missing`
 from `mcp-server/`), comfortably above the 80% target.
 **backend/shared test suite (Task 9):** 12/12 passing, 100% coverage (`--cov=. --cov-report=term-missing`
@@ -988,6 +997,67 @@ the same reasoning Phase 3's own health-check recommendation gave.
   own explicitly-scheduled follow-up (flagged in "Open Questions" below) rather than blocking
   this merge on an infrastructure phase that hasn't started yet.
 
+### Phase 5 — `frontend` (React) — Tasks 23–26, in progress
+
+- Branch: `feature/phase-5-frontend`, cut from `main` after confirming PR #13 (Phase 4) merged
+  (see Current State note above re: stale local `main`, second occurrence of the same pattern
+  as Phase 4's own session-start correction).
+- **Checked project-log for standing findings before starting, per the user's explicit ask —
+  none apply to Task 23:** the app-package-name import collision (Task 18) is Python-packaging-
+  specific (`app` as a top-level module name across `backend/*` services); `frontend/` has no
+  Python package and isn't affected. The DynamoDB GSI-vs-plain-fixture distinction (Tasks 20/21)
+  is backend-only; Task 23 makes no DynamoDB calls at all (it's a pure API-client/routing
+  skeleton, backed by `vi.stubGlobal("fetch", ...)` mocks, not a real backend). The GitHub-auth
+  infra gap (Task 22, still an open follow-up) doesn't apply yet either — `createGithubIssue` in
+  `client.ts` is a thin fetch wrapper with no MCP/GitHub call of its own; the gap only matters
+  once a page actually invokes it against a real deployment (Task 25 or later), not at the
+  client-wrapper level Task 23 builds.
+- **Task 23 (Frontend skeleton — API client, routing, Vitest config) ✅.** TDD: wrote
+  `client.test.ts` first, verified RED (`Failed to resolve import "./client"` — Vite's actual
+  wording for the plan's expected "Cannot find module", same underlying cause, not a concern).
+  - **Real, empirically-confirmed bug in the plan's own literal `client.ts`/`client.test.ts`
+    snippets, found via the mandatory RED→implement→verify-GREEN step, not by inspection:**
+    implementing `request<T>(path: string, options?: RequestInit)` exactly as written and running
+    the `getAnalysis` test (which calls `request` with no `options` arg) failed —
+    `expect(fetch).toHaveBeenCalledWith("/api/analyses/a1", expect.anything())` doesn't match,
+    because `fetch(`${BASE_URL}${path}`, options)` with `options` left `undefined` still passes an
+    explicit second argument (`arguments.length === 2`), and Vitest/Jest's `expect.anything()`
+    explicitly excludes `undefined` (confirmed directly: a throwaway debug test logged the actual
+    captured call args as `["/api/analyses/a1", undefined]`, length 2 — removed after confirming).
+    **Fix:** changed the parameter to `options: RequestInit = {}` (default instead of optional) —
+    one-line change, doesn't touch either test file, `createAnalysis`'s test (which does pass
+    explicit options) is unaffected. Full frontend suite after: 3/3 passing (1 pre-existing smoke
+    test + 2 new).
+  - **Two more real gaps found via `npm run build` (`tsc -b && vite build`) — not part of Task
+    23's own literal verification step (`npm test -- client.test.ts`), but checked anyway per this
+    project's established "run it for real, don't just trust the snippet" discipline:**
+    1. `import.meta.env.VITE_API_BASE_URL` (`client.ts`, straight from the plan's own snippet)
+       doesn't type-check — `tsconfig.json`'s `types` array never included `vite/client`. Fixed
+       directly (config-only change, `vite/client`'s types ship inside the already-installed
+       `vite` devDependency — not a new dependency, so no approval needed). Confirmed the fix by
+       re-running `tsc -b`: the `ImportMeta`/`env` error is gone.
+    2. **Not fixed, flagged instead:** every `.tsx` file fails to type-check
+       (`TS7016: Could not find a declaration file for module 'react'`, etc.) —
+       `frontend/package.json` has never had `@types/react`/`@types/react-dom` in
+       `devDependencies`, since Task 23 is the first task to write real JSX (Phase 0's Task 1 smoke
+       test was plain `.ts`, no JSX). This is a genuine new-dependency addition, not a config fix,
+       so per CLAUDE.md's dependency-approval rule it's left unresolved here rather than
+       `npm install`ed unilaterally. **Does not block Task 23 itself** — `npm test` (Vitest, via
+       esbuild) doesn't need type declarations to run and passes cleanly; it only blocks
+       `npm run build`'s `tsc -b` step, which nothing in Task 23's plan text requires. Will need a
+       decision before Task 36 (CI pipeline, if it type-checks the frontend) or before relying on
+       `npm run build` for anything real.
+  - Housekeeping: removed `frontend/tsconfig.tsbuildinfo`, a `tsc -b` build-cache artifact
+    generated by this session's own verification `npm run build` run (not part of the plan's file
+    list) — added `frontend/*.tsbuildinfo` to `.gitignore` so it doesn't reappear as an untracked
+    file for the next session.
+  - `frontend` suite: 3/3 passing. Repo-wide regression check (Python suites, unaffected by a
+    frontend-only branch — checked anyway, same discipline as every prior phase):
+    `backend/worker` 38/38, `backend/shared` 12/12, `backend/api` 16/16, `mcp-server` 17/17 — all
+    unchanged from Phase 4's baseline.
+  - No credential/secret handling in this task — `createGithubIssue`/`getReport` are thin fetch
+    wrappers with no token of their own; `git diff` scanned clean for secret-shaped strings.
+
 ---
 
 ## Open Questions / Things to Revisit
@@ -1038,3 +1108,15 @@ the same reasoning Phase 3's own health-check recommendation gave.
   `requirement_retriever`'s comments fetch (Task 11) will all 401 against a real `mcp-github`
   deployment, though none of this is visible from any current test suite, all of which pass
   cleanly by design (mocked transport boundary).
+
+- **KNOWN FOLLOW-UP, needs explicit user approval to resolve: `frontend/package.json` has no
+  `@types/react`/`@types/react-dom` in `devDependencies`.** Found during Task 23 (Phase 5) — the
+  first task to write real `.tsx`/JSX (Phase 0's Task 1 smoke test was plain `.ts`). `npm test`
+  (Vitest, esbuild-transformed) doesn't need type declarations and passes cleanly; `npm run
+  build`'s `tsc -b` step fails on every `.tsx` file (`TS7016`, `TS7026`) without them. Not added
+  in this branch — it's a new dependency addition, which CLAUDE.md's standing rule requires
+  explicit approval for before installing, same as any other dependency change. Needs a decision
+  (add `@types/react`/`@types/react-dom` as devDependencies, pinned to match the installed
+  `react@^18.3.1`/`react-dom@^18.3.1` majors) before Task 36 (CI pipeline) if it type-checks the
+  frontend, or before `npm run build` is relied on for anything real (e.g. Task 43's local
+  full-stack E2E smoke test, or a production frontend build).
