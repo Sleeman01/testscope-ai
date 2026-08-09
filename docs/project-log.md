@@ -20,14 +20,21 @@ Update this after each phase (or whenever something worth remembering happens).
 ## Current State
 
 **Phase:** 0 (complete, merged) → 1 (Tasks 2–8, complete, merged to `main`) → 2
-(`backend/shared`, Task 9, complete, merged to `main`) → 3 (`backend/worker`, Tasks 10–17)
-complete, not yet merged
+(`backend/shared`, Task 9, complete, merged to `main`) → 3 (`backend/worker`, Tasks 10–17,
+complete, merged to `main` via PR #12) → 4 (`backend/api`, Tasks 18–22) — **Task 18 complete,
+Tasks 19–22 not started**
 **Branch pattern in use:** `feature/phase-<N>-<short-description>`, one PR per phase (docs-only
 housekeeping like this entry uses `docs/<short-description>` instead)
-**Current branch:** `feature/phase-3-backend-worker` (cut from `main` after Phase 2's merge;
-not yet merged). **Phase 3 (Tasks 10–17) is now fully complete on this branch — all 8 tasks
-done, not yet merged. Recommend a Phase 3 health check (see entry below) before merging.**
-**Last merged:** Phase 2 (Task 9, `backend/shared`) → `main`.
+**Current branch:** `feature/phase-4-backend-api` (cut fresh from `main` after confirming PR #12
+merged; local `main` was stale — see note below).
+**Last merged:** Phase 3 (Tasks 10–17, `backend/worker`) → `main` via PR #12
+(2026-08-09T18:11:13Z).
+**Session-start correction:** local `main` was 21 commits behind `origin/main` (the PR #12
+merge happened upstream but hadn't been fetched locally) — `git log main` looked like Phase 3
+was still unmerged until `git fetch origin main` + `git pull --ff-only` caught it up. Confirmed
+via `gh pr list` (PR #12 shown MERGED) before trusting it. Flagging per CLAUDE.md's "don't rely
+solely on the log's claims" rule — this wasn't the log being wrong, it was the local clone being
+stale, but the same verify-before-trusting principle applied.
 **mcp-server test suite:** 17/17 passing, 90% coverage (`--cov=. --cov-report=term-missing`
 from `mcp-server/`), comfortably above the 80% target.
 **backend/shared test suite (Task 9):** 12/12 passing, 100% coverage (`--cov=. --cov-report=term-missing`
@@ -592,6 +599,50 @@ bug could even surface, and it's cheap to double-check now versus after merge.
   prior fixes (schema, mocking, AWS credentials, test ordering) hold up under repeated runs,
   and the one finding from the health check is now fixed and verified both by new unit tests
   and by re-running the original empirical reproduction.
+
+### Phase 4 — `backend/api` (FastAPI) — in progress (Task 18 of 18–22 complete)
+
+- Branch: `feature/phase-4-backend-api`, cut from `main` after confirming PR #12 (Phase 3)
+  merged (see Current State note above re: stale local `main`).
+- **Task 18 (API skeleton — app factory, schemas, health endpoints) ✅**, TDD, implemented
+  verbatim from plan.md. `backend/api` suite: 3/3 passing (2 new + the Phase 0 smoke test).
+  Repo-wide regression check: `backend/worker` 38/38, `backend/shared` 12/12, `mcp-server`
+  17/17 — all unaffected.
+- **Real, repo-wide environment gotcha found during the mandatory TDD "verify RED" step (Step
+  2), not a bug in this task's own code — flagging per CLAUDE.md rather than silently working
+  around it:** `backend/api` and `backend/worker` both use a top-level package literally named
+  `app` (per plan.md's own file layout for every backend service). Each service's
+  `pip install -e` generates its own setuptools editable-install finder
+  (`__editable___testscope_<name>_finder.py`), and every one of those finders registers `app`
+  in its own `MAPPING` dict. Confirmed by direct inspection of the generated finder files and a
+  `sys.meta_path`/`sys.path` dump under pytest: when a submodule (e.g. `app.main`) doesn't yet
+  exist in the service actually being tested, that service's own finder correctly returns `None`
+  for it — but the *fallback* branch each finder uses for "immediate children of a mapped
+  package" ignores the real, already-narrowed `path` argument the import system passes in and
+  substitutes its own hardcoded `MAPPING["app"]` value instead. Since finders are checked in
+  `sys.meta_path` order (alphabetical by package name at `.pth`-load time — `api`, `mcp`,
+  `shared`, `worker`), a missing `app.main` in `backend/api` fell through past `api`'s own
+  (correctly-`None`) finder all the way to `worker`'s finder, which *does* have a real
+  `app/main.py` — so `from app.main import create_app` in the not-yet-implemented
+  `test_health.py` silently imported **`backend/worker`'s** `app/main.py` instead of failing
+  with a clean `ModuleNotFoundError`, and then failed several imports deeper on an unrelated
+  `ModuleNotFoundError: No module named 'retry'` (a `backend/worker`-only module). Reproduced
+  and root-caused with a throwaway debug test (not committed) dumping `sys.meta_path`/`sys.path`
+  before concluding this rather than guessing. **Not fixed at the packaging level** — the
+  generated finder files are regenerated on every `pip install -e` and aren't meant to be
+  hand-edited, and a real fix (e.g. renaming every service's top-level package away from `app`)
+  would be an invasive, repo-wide rename touching already-merged Phase 0–3 code, out of scope
+  for a single task and not something to do silently. **Practical impact is narrow and
+  self-resolving:** it only manifests transiently, during a RED-verification step, for a
+  submodule path that (a) doesn't yet exist in the service under test and (b) happens to exist
+  at the exact same dotted path in another service (here, `app.main` in both `api` and
+  `worker`). The moment the real file is created (Step 3, as normal), `PathFinder` finds it
+  directly via the already-narrowed path *before* any editable finder is even consulted, and the
+  collision permanently disappears for that path. **Flagging forward for Tasks 19–22 and beyond:**
+  if a future RED-verification failure doesn't look like a clean `ModuleNotFoundError` for the
+  missing `backend/api` file — e.g. it fails several frames deeper, or the traceback shows
+  `../worker/app/...` paths — that's very likely this same collision, not a real regression;
+  check the traceback's file paths before assuming the test or feature is broken.
 
 ---
 
