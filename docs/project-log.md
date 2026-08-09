@@ -22,10 +22,12 @@ Update this after each phase (or whenever something worth remembering happens).
 **Phase:** 0 (complete, merged) → 1 (Tasks 2–8, complete, merged to `main`) → 2
 (`backend/shared`, Task 9, complete, merged to `main`) → 3 (`backend/worker`, Tasks 10–17,
 complete, merged to `main` via PR #12) → 4 (`backend/api`, Tasks 18–22, complete, merged to
-`main` via PR #13) → 5 (`frontend`, Tasks 23–26) — **Tasks 23 (API client, routing, page stubs),
-24 (Home page), and 25 (Results page) complete on `feature/phase-5-frontend`. Task 26 not yet
-started. `frontend/index.html` (a plan gap — no task created it) was added out-of-band per the
-user's decision; `npm run build` is now fully green end-to-end.**
+`main` via PR #13) → 5 (`frontend`, Tasks 23–26) — **all 4 tasks (23–26) complete on
+`feature/phase-5-frontend`, not yet merged. `frontend/index.html` (a plan gap — no task created
+it) added out-of-band per the user's decision; `npm run build` and the `frontend/Dockerfile`
+(built + run + curl-verified) are both fully green end-to-end. Phase 5 self-check run (see entry
+below) — recommendation: skip a dedicated health check, risk profile is much smaller than
+Phase 3/4's; one small optional gap noted (no `<App />`-level routing integration test).**
 **Branch pattern in use:** `feature/phase-<N>-<short-description>`, one PR per phase (docs-only
 housekeeping like this entry uses `docs/<short-description>` instead)
 **Current branch:** `feature/phase-5-frontend` (cut fresh from `main` after confirming PR #13
@@ -47,10 +49,12 @@ main` looked like Phase 3 was still unmerged until `git fetch origin main` + `gi
 Flagging per CLAUDE.md's "don't rely solely on the log's claims" rule — this wasn't the log
 being wrong, it was the local clone being stale, but the same verify-before-trusting principle
 applied.
-**frontend test suite (Tasks 23–25):** 5/5 passing (`npm test` from `frontend/`, Vitest) — the
-pre-existing smoke test, 2 `client.test.ts` cases, 1 `Home.test.tsx` case, and 1
-`Results.test.tsx` case. `npm run build` (`tsc -b && vite build`) is now fully green end-to-end.
-Repo-wide regression check: `backend/worker` 38/38, `backend/shared` 12/12, `backend/api` 16/16,
+**frontend test suite (Tasks 23–26):** 6/6 passing (`npm test` from `frontend/`, Vitest) — the
+pre-existing smoke test, 2 `client.test.ts` cases, 1 `Home.test.tsx` case, 1 `Results.test.tsx`
+case, and 1 `History.test.tsx` case. `npm run build` (`tsc -b && vite build`) is fully green
+end-to-end; `frontend/Dockerfile` builds and serves real HTTP traffic (verified via `docker run`
++ `curl`). Repo-wide regression check: `backend/worker` 38/38, `backend/shared` 12/12,
+`backend/api` 16/16,
 `mcp-server` 17/17 — all unchanged from Phase 4's baseline.
 **mcp-server test suite:** 17/17 passing, 90% coverage (`--cov=. --cov-report=term-missing`
 from `mcp-server/`), comfortably above the 80% target.
@@ -617,7 +621,7 @@ bug could even surface, and it's cheap to double-check now versus after merge.
   and the one finding from the health check is now fixed and verified both by new unit tests
   and by re-running the original empirical reproduction.
 
-### Phase 4 — `backend/api` (FastAPI) — all 5 tasks (18–22) complete, not yet merged
+### Phase 4 — `backend/api` (FastAPI) — all 5 tasks (18–22) complete, merged via PR #13
 
 - Branch: `feature/phase-4-backend-api`, cut from `main` after confirming PR #12 (Phase 3)
   merged (see Current State note above re: stale local `main`).
@@ -1000,7 +1004,7 @@ the same reasoning Phase 3's own health-check recommendation gave.
   own explicitly-scheduled follow-up (flagged in "Open Questions" below) rather than blocking
   this merge on an infrastructure phase that hasn't started yet.
 
-### Phase 5 — `frontend` (React) — Tasks 23–26, in progress
+### Phase 5 — `frontend` (React) — Tasks 23–26 ✅ complete (all 4 tasks)
 
 - Branch: `feature/phase-5-frontend`, cut from `main` after confirming PR #13 (Phase 4) merged
   (see Current State note above re: stale local `main`, second occurrence of the same pattern
@@ -1149,6 +1153,88 @@ the same reasoning Phase 3's own health-check recommendation gave.
     no token of its own (same as Task 23's client wrapper); the GitHub-auth infra gap (Task 22,
     still open) applies once this button is used against a real deployment, not to anything added
     in this task's own code.
+- **Task 26 (History page) ✅**, implemented verbatim from plan.md — no deviations, no plan bugs
+  found (unlike Tasks 23's/25's). RED-verification failed clean (stub `History` renders nothing
+  matching). `frontend` suite: 6/6 passing (up from Task 25's 5/5).
+  - **Step 7/8, `frontend/Dockerfile` (multi-stage, nginx) — verified for real, same discipline as
+    Tasks 17/22, not just written and trusted:** `docker build -f frontend/Dockerfile .` (repo-root
+    context, matching `backend/worker`'s/`backend/api`'s established convention) succeeded; then
+    `docker run` + `curl` against the live container confirmed nginx actually serves the built
+    bundle (`HTTP 200`, real `index.html` with the correct hashed script tag) — proves the Task
+    23/25 `index.html` fix holds *inside the container* too, not just local dev. Verification
+    image/container removed after confirming.
+  - **Observation, not a plan bug (the build succeeded as written, nothing the plan requires
+    failed) — noted for the record only:** the Dockerfile's Step 7 text copies only
+    `frontend/package.json` into the build stage, not `frontend/package-lock.json`, so
+    `RUN npm install` inside the image re-resolves versions independently rather than reproducing
+    the checked-in lockfile. Confirmed this actually causes drift, not just a theoretical
+    possibility: the container build's own `npm install` log reported **7** `npm audit` findings
+    where the host (lockfile-resolved) `npm audit` reports **8** — different dependency
+    resolution, not a copy-paste discrepancy. Doesn't fail anything the plan's own steps check for,
+    so not fixed here (would mean deviating from Step 7's literal `COPY frontend/package.json .`),
+    but worth knowing before Task 32/37/38 build this image for real deployment: image contents
+    aren't guaranteed to exactly match what `npm test`/`npm run build` verified locally.
+  - `npm run build` still fully green end-to-end. Repo-wide regression check: `backend/worker`
+    38/38, `backend/shared` 12/12, `backend/api` 16/16, `mcp-server` 17/17 — all unchanged.
+  - No credential/secret handling, no new dependencies.
+
+**Phase 5 self-check (post-Task 26, before push/merge):**
+- Grepped `frontend/src/`, `index.html`, `Dockerfile`, `vitest.config.ts`, `tsconfig.json`,
+  `package.json` for `TODO`/`FIXME`/`XXX`/`HACK` markers, `console.log`/`console.debug`/
+  `console.warn`/`console.error`/`debugger` statements, and secret-shaped strings
+  (`ghp_`/`github_pat_`/`AWS_SECRET`/inline `api_key=`/`token=` literals) — **all clean, zero
+  hits.** No `.env`/`.env*` files anywhere under `frontend/`. No leftover debug/scratch files
+  (this session's own throwaway debug tests and probe files were removed immediately after each
+  one confirmed its finding, per the same hygiene precedent as Phase 4's health check).
+- **File-state audit:** `git diff --stat main...feature/phase-5-frontend` shows exactly 20 files
+  changed — all Phase 5 scope (the 4 tasks' page/test files, `api/client.ts`/`types.ts`,
+  `App.tsx`/`main.tsx`, `index.html`, `Dockerfile`, `vitest.config.ts`, `setupTests.ts`,
+  `tsconfig.json`, `package.json`/`package-lock.json`, `.gitignore`, this doc) — nothing stray.
+  Working tree clean; no leftover Docker images/containers from this session's verification runs.
+- **Housekeeping correction while checking this doc's own accuracy (per the user's explicit
+  ask):** the Phase 4 section header above still read "not yet merged" even though PR #13 merged
+  it (confirmed at the start of this phase) — fixed to say "merged via PR #13," same class of
+  stale-header fix as Phase 3's own health check made.
+- **This phase found four real bugs in the plan's own literal snippets/setup, all fixed or
+  explicitly flagged, none silent:** Task 23's `options?: RequestInit`/`expect.anything()`
+  mismatch (fixed), the missing `@types/react`/`@types/react-dom` (flagged, then user-approved and
+  added), the missing `frontend/index.html` (flagged, then user-approved and added), and the
+  never-wired `@testing-library/jest-dom` (fixed, no new dependency). All four are documented
+  above in their originating task's entry, with the empirical evidence that confirmed each one
+  before fixing — none applied on inspection alone.
+
+**Is a dedicated Phase 5 health check (matching Phase 3's/4's format) warranted before
+push/merge? No — recommend skipping it, for reasons specific to this phase's shape, not as a
+default:**
+- **Risk profile is fundamentally smaller than Phase 3/4.** Every Phase 5 task is a thin,
+  presentational React component consuming an already-tested `client.ts` wrapper; there's no
+  business logic, no real external service call, no AWS resource, and no credential/auth boundary
+  anywhere in this phase's own code (`fetch` is mocked in every test, and the GitHub-auth gap
+  belongs to `backend/api`'s Task 22, not anything added here). Phase 3's health check mattered
+  because Task 17 wired 16 already-merged nodes together for the first time and found real,
+  state-corrupting bugs (a dropped `AgentState` key, wrong `unittest.mock.patch` targets, live
+  AWS credentials leaking into a subprocess); Phase 4's mattered because of real DynamoDB
+  GSI/dependency/auth gaps with production consequences. Nothing in Phase 5 has that class of
+  blast radius — the worst-case failure mode here is a broken link or a page that shows "Loading…"
+  forever, immediately visible in a browser, not silent data corruption or a security exposure.
+- **The "run it for real" checks a dedicated health check would add were already done, per-task,
+  throughout this phase — not concentrated at the end the way Phase 3/4 did it.** `npm run build`
+  was run after every single task (not just once at the end); the Dockerfile was built *and* run
+  *and* hit with a real `curl` request in this same session, not deferred; the repo-wide Python
+  regression check ran after every task, four times total, not once. A dedicated health check's
+  main value-add over what already happened would be re-running things an extra time to catch
+  flakiness — a much smaller marginal gain here than it was for Phase 3/4's first-time
+  integration risk.
+- **One residual gap worth naming honestly, even though it doesn't change the recommendation:**
+  no test in this phase renders `<App />` itself and exercises real routing between pages — every
+  page test uses its own isolated `MemoryRouter` (per the plan's own literal snippets), so nothing
+  proves `/` → `/analyses/:id` → `/history` navigation actually works end-to-end through the real
+  route table. This is the same *class* of gap Phase 3's Task 17 health check went looking for
+  (isolated unit tests green, nothing proving the wiring), but the consequence here is far
+  smaller (a broken `<Route>` path is immediately obvious the first time anyone opens the app,
+  not a silent state-corruption bug) — flagging it as optional, cheap insurance if extra
+  confidence is wanted (one small `App.test.tsx` rendering `<App />` inside a `MemoryRouter` and
+  clicking through), not a blocker for merging as-is.
 
 ---
 
