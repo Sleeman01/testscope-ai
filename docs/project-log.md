@@ -19,14 +19,20 @@ Update this after each phase (or whenever something worth remembering happens).
 
 ## Current State
 
-**Phase:** 0 (complete, merged) → 1 (Tasks 2–8 all complete, not yet merged) → Phase 2
-(`backend/shared`, Task 9) not started
+**Phase:** 0 (complete, merged) → 1 (Tasks 2–8, complete, merged to `main`) → Phase 2
+(`backend/shared`, Task 9) complete, not yet merged
 **Branch pattern in use:** `feature/phase-<N>-<short-description>`, one PR per phase (docs-only
 housekeeping like this entry uses `docs/<short-description>` instead)
-**Current branch:** `feature/phase-1-mcp-test-analysis-server` (not yet merged to `main`)
-**Last merged:** `docs/claude-md` → `main` (PR #8)
+**Current branch:** `feature/phase-2-backend-shared` (cut from `main` after Phase 1's merge;
+not yet merged)
+**Last merged:** Phase 1 (Tasks 2–8, `mcp-test-analysis` server) → `main`. This session found
+`main` already had the Phase 1 merge commit (git log) even though this file's previous
+"Current State" still said "not yet merged" — corrected here per CLAUDE.md's "don't trust the
+log's claims if out of sync with the repo" rule; the merge itself happened outside this session.
 **mcp-server test suite:** 17/17 passing, 90% coverage (`--cov=. --cov-report=term-missing`
 from `mcp-server/`), comfortably above the 80% target.
+**backend/shared test suite (Task 9):** 12/12 passing, 100% coverage (`--cov=. --cov-report=term-missing`
+from `backend/shared/`).
 **Read before starting Task 9:** `docs/2026-07-30-testscope-ai-design.md` §5.2 — the GitHub
 MCP tool-name assumptions there were found wrong during Task 8's live verification (see
 Phase 1 entry below); Task 9 itself is unaffected (no GitHub MCP calls), but anyone
@@ -134,6 +140,36 @@ starting Phase 3 (Task 11) or Task 22 must read that section first, not spec's o
     (`Contents: read` + `Issues: read`), supplied via a scratchpad env file outside the repo
     tree, referenced by `docker run --env-file`/`httpx2` headers without ever being printed
     to the transcript, and deleted immediately after verification completed.
+
+### Phase 2 — `backend/shared` (Task 9: config, AWS client wrappers, `AnalysisRecord`) — ✅ complete
+- Branch: `feature/phase-2-backend-shared`, cut from `main` after Phase 1's merge.
+- TDD throughout: `models.py`/fixture → `config.py` → `dynamodb.py` (`AnalysisStore`) →
+  `s3.py` (`ReportStore`) → `sqs.py` (`JobQueue`), each with a verified-failing test first.
+  Full suite: 12/12 passing, **100%** coverage (`--cov=. --cov-report=term-missing`).
+- **Pre-emptive fix (not a deviation — already in the plan's own Step 3 text):** added
+  `pydantic-settings>=2.6` to `backend/shared/pyproject.toml`; `config.py`'s
+  `from pydantic_settings import BaseSettings` would otherwise `ModuleNotFoundError` since
+  only bare `pydantic` was listed. Flagged before starting per CLAUDE.md, but on inspection
+  the plan document itself already calls for this addition — so implemented as written, not
+  as a silent addition.
+- **Deviation (approved by precedent, not literal plan text):** `AnalysisStore.upsert`
+  round-trips `record.model_dump()` through `json.dumps`/`json.loads(parse_float=Decimal)`
+  before `put_item`, and a 5th test (`test_upsert_coerces_float_coverage_summary_for_dynamodb`)
+  was added beyond the plan's literal 4 `test_dynamodb.py` cases. Reason: `coverage_summary`
+  is a bare `dict` that can carry a native float (e.g. straight from the shared fixture's
+  `percent_covered: 80.0`), and boto3's DynamoDB `put_item` rejects floats outright — the
+  exact bug already hit and fixed in Tasks 6 & 7 (see Phase 1 above). Pre-empted here rather
+  than waiting to rediscover it, consistent with how Task 7 pre-empted Task 6's finding.
+- **Addition beyond the plan's literal file list:** `tests/test_config.py` — the plan's Task 9
+  steps never exercise `config.py`/`get_settings()` (no test file for it is listed), leaving
+  it at 0% coverage even though it's the file whose new dependency needed the fix above. Added
+  one test proving `get_settings()` actually loads required fields from env vars (not just
+  that the import succeeds), since that was the one thing this session couldn't take on faith.
+- **Housekeeping correction:** this file's "Current State" said Phase 1 was "not yet merged";
+  `git log main` showed it already had been (merged outside this session). Corrected above.
+- `ruff check .` reports 10 pre-existing import-sort (`I001`) warnings, matching the same
+  style already present and unfixed in `mcp-server` (36 warnings there) — not a new
+  regression, left as-is rather than reformatting away from the plan's literal snippets.
 
 ---
 
