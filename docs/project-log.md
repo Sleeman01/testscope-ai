@@ -20,14 +20,26 @@ Update this after each phase (or whenever something worth remembering happens).
 ## Current State
 
 **Phase:** 0 (complete, merged) → 1 (Tasks 2–8, complete, merged to `main`) → 2
-(`backend/shared`, Task 9, complete, merged to `main`) → 3 (`backend/worker`, Tasks 10–17)
-complete, not yet merged
+(`backend/shared`, Task 9, complete, merged to `main`) → 3 (`backend/worker`, Tasks 10–17,
+complete, merged to `main` via PR #12) → 4 (`backend/api`, Tasks 18–22) — **all 5 tasks (18–22)
+complete on `feature/phase-4-backend-api`. Phase 4 health check run (see entry below) — verdict:
+sound and safe to merge from a code-correctness standpoint, not yet merged/pushed. A known,
+deliberately-unresolved architectural gap (GitHub token custody vs. required per-request auth —
+see Task 22 entry and "Open Questions" below) means `POST /api/analyses/{id}/github-issue` will
+not actually work against the real `mcp-github` server as currently designed; this is tracked as
+its own follow-up, not a blocker for merging Phase 4's code.**
 **Branch pattern in use:** `feature/phase-<N>-<short-description>`, one PR per phase (docs-only
 housekeeping like this entry uses `docs/<short-description>` instead)
-**Current branch:** `feature/phase-3-backend-worker` (cut from `main` after Phase 2's merge;
-not yet merged). **Phase 3 (Tasks 10–17) is now fully complete on this branch — all 8 tasks
-done, not yet merged. Recommend a Phase 3 health check (see entry below) before merging.**
-**Last merged:** Phase 2 (Task 9, `backend/shared`) → `main`.
+**Current branch:** `feature/phase-4-backend-api` (cut fresh from `main` after confirming PR #12
+merged; local `main` was stale — see note below).
+**Last merged:** Phase 3 (Tasks 10–17, `backend/worker`) → `main` via PR #12
+(2026-08-09T18:11:13Z).
+**Session-start correction:** local `main` was 21 commits behind `origin/main` (the PR #12
+merge happened upstream but hadn't been fetched locally) — `git log main` looked like Phase 3
+was still unmerged until `git fetch origin main` + `git pull --ff-only` caught it up. Confirmed
+via `gh pr list` (PR #12 shown MERGED) before trusting it. Flagging per CLAUDE.md's "don't rely
+solely on the log's claims" rule — this wasn't the log being wrong, it was the local clone being
+stale, but the same verify-before-trusting principle applied.
 **mcp-server test suite:** 17/17 passing, 90% coverage (`--cov=. --cov-report=term-missing`
 from `mcp-server/`), comfortably above the 80% target.
 **backend/shared test suite (Task 9):** 12/12 passing, 100% coverage (`--cov=. --cov-report=term-missing`
@@ -593,6 +605,389 @@ bug could even surface, and it's cheap to double-check now versus after merge.
   and the one finding from the health check is now fixed and verified both by new unit tests
   and by re-running the original empirical reproduction.
 
+### Phase 4 — `backend/api` (FastAPI) — all 5 tasks (18–22) complete, not yet merged
+
+- Branch: `feature/phase-4-backend-api`, cut from `main` after confirming PR #12 (Phase 3)
+  merged (see Current State note above re: stale local `main`).
+- **Task 18 (API skeleton — app factory, schemas, health endpoints) ✅**, TDD, implemented
+  verbatim from plan.md. `backend/api` suite: 3/3 passing (2 new + the Phase 0 smoke test).
+  Repo-wide regression check: `backend/worker` 38/38, `backend/shared` 12/12, `mcp-server`
+  17/17 — all unaffected.
+- **Real, repo-wide environment gotcha found during the mandatory TDD "verify RED" step (Step
+  2), not a bug in this task's own code — flagging per CLAUDE.md rather than silently working
+  around it:** `backend/api` and `backend/worker` both use a top-level package literally named
+  `app` (per plan.md's own file layout for every backend service). Each service's
+  `pip install -e` generates its own setuptools editable-install finder
+  (`__editable___testscope_<name>_finder.py`), and every one of those finders registers `app`
+  in its own `MAPPING` dict. Confirmed by direct inspection of the generated finder files and a
+  `sys.meta_path`/`sys.path` dump under pytest: when a submodule (e.g. `app.main`) doesn't yet
+  exist in the service actually being tested, that service's own finder correctly returns `None`
+  for it — but the *fallback* branch each finder uses for "immediate children of a mapped
+  package" ignores the real, already-narrowed `path` argument the import system passes in and
+  substitutes its own hardcoded `MAPPING["app"]` value instead. Since finders are checked in
+  `sys.meta_path` order (alphabetical by package name at `.pth`-load time — `api`, `mcp`,
+  `shared`, `worker`), a missing `app.main` in `backend/api` fell through past `api`'s own
+  (correctly-`None`) finder all the way to `worker`'s finder, which *does* have a real
+  `app/main.py` — so `from app.main import create_app` in the not-yet-implemented
+  `test_health.py` silently imported **`backend/worker`'s** `app/main.py` instead of failing
+  with a clean `ModuleNotFoundError`, and then failed several imports deeper on an unrelated
+  `ModuleNotFoundError: No module named 'retry'` (a `backend/worker`-only module). Reproduced
+  and root-caused with a throwaway debug test (not committed) dumping `sys.meta_path`/`sys.path`
+  before concluding this rather than guessing. **Not fixed at the packaging level** — the
+  generated finder files are regenerated on every `pip install -e` and aren't meant to be
+  hand-edited, and a real fix (e.g. renaming every service's top-level package away from `app`)
+  would be an invasive, repo-wide rename touching already-merged Phase 0–3 code, out of scope
+  for a single task and not something to do silently. **Practical impact is narrow and
+  self-resolving:** it only manifests transiently, during a RED-verification step, for a
+  submodule path that (a) doesn't yet exist in the service under test and (b) happens to exist
+  at the exact same dotted path in another service (here, `app.main` in both `api` and
+  `worker`). The moment the real file is created (Step 3, as normal), `PathFinder` finds it
+  directly via the already-narrowed path *before* any editable finder is even consulted, and the
+  collision permanently disappears for that path. **Flagging forward for Tasks 19–22 and beyond:**
+  if a future RED-verification failure doesn't look like a clean `ModuleNotFoundError` for the
+  missing `backend/api` file — e.g. it fails several frames deeper, or the traceback shows
+  `../worker/app/...` paths — that's very likely this same collision, not a real regression;
+  check the traceback's file paths before assuming the test or feature is broken.
+- **Task 19 (`POST /api/analyses`) ✅**, TDD, implemented verbatim from plan.md — no deviations.
+  RED-verification confirmed clean this time (`404`/`KeyError`, the route simply not existing
+  yet — not the Task 18 app-package collision; checked the traceback shape per that note before
+  trusting it, since this was exactly the scenario flagged to watch for).
+  - **Checked design.md §5.2's substitute-tool table against this task's plan.md snippet before
+    implementing, per the standing Task 8 finding — not applicable here.** Task 19's own code
+    (`app/routes/analyses.py`) makes no GitHub/MCP calls at all; it only touches
+    `AnalysisStore.upsert`/`JobQueue.send_job` (Task 9, `backend/shared`) and enqueues a job for
+    the worker to pick up later. §5.2's stale-tool-name findings only affect Tasks 11/22 (the two
+    GitHub MCP client callers) — confirmed by reading Task 19's plan.md text in full rather than
+    assuming.
+  - **Verified `AnalysisStore.upsert`'s and `JobQueue.send_job`'s real signatures against
+    `backend/shared`'s actual implementation before trusting the plan's snippet** (same
+    precedent as Task 12's Anthropic-SDK check) — both match exactly
+    (`AnalysisStore(table_name=...)`, `.upsert(AnalysisRecord(...))`,
+    `JobQueue(queue_url).send_job(analysis_id, repository, issue_number, notes)`), no staleness
+    found, implemented as literally written.
+  - No credential/secret handling in this task (no MCP/GitHub/Anthropic calls) — nothing to flag
+    on that front.
+  - `backend/api` suite: 5/5 passing, **100%** coverage (`--cov=. --cov-report=term-missing`) —
+    `app/schemas.py` now exercised (was 0% after Task 18, deliberately, since nothing consumed
+    those models yet) via `CreateAnalysisRequest`/`CreateAnalysisResponse`. Repo-wide regression
+    check: `backend/worker` 38/38 (94%), `backend/shared` 12/12 (100%), `mcp-server` 17/17
+    (90%) — all unchanged from Task 18's baseline, unaffected by this branch.
+  - `ruff check .` on the two new/modified files: same `I001` import-sort category already
+    established as "leave as-is, verbatim from plan.md" precedent, plus one new-but-same-class
+    `UP017` (`datetime.UTC` alias) finding — matches the identical `UP017` already left as-is in
+    `backend/worker/app/runner.py` (Phase 3), not a new category of issue. Left as-is per that
+    precedent.
+- **Task 20 (`GET /api/analyses/{id}` and `GET /api/analyses`) ✅**, TDD.
+  - **RED-verification note:** `test_get_returns_404_for_unknown_id` passed immediately, before
+    any implementation existed — a harmless coincidence (a nonexistent *route* also 404s,
+    indistinguishable at that point from a *record* not found), not the Task 18 app-package
+    collision (checked: no `ModuleNotFoundError`, no `../worker/app/...` in any traceback this
+    task). The other two tests failed cleanly (`404`/`405`, route/method not found) before
+    implementation, and the test still exercises the real lookup-miss code path after
+    implementation — no action needed, noting only for the next session's awareness.
+  - **Real bug found and fixed, deviation from plan.md's literal Step 1 text — flagged, not
+    silently applied:** Step 1 says "Reuses the `client` fixture pattern from
+    `test_create_analysis.py` — copy the fixture verbatim into this file." Doing exactly that
+    and running Step 2 empirically confirmed a real failure beyond the expected one:
+    `test_list_returns_recent_analyses` failed with
+    `botocore.errorfactory.ResourceNotFoundException: Invalid index: recent-index for table:
+    testscope-analyses-test` — `AnalysisStore.list_recent` (Task 9) queries a `recent-index` GSI
+    that the copied fixture's `ddb.create_table(...)` call never creates (it only declares the
+    base `analysis_id` hash key, no `GlobalSecondaryIndexes` at all). This isn't the Task 18
+    collision (no import failure, a genuine AWS/moto error surfaced deep in the FastAPI request
+    stack) and isn't fixable in production code — the GSI has to exist on the test table for the
+    query to succeed. **Fix:** copied the exact table schema (`AttributeDefinitions` for
+    `repository_issue`/`created_at`/`gsi2_pk`, both `repository_issue-index` and `recent-index`
+    GSIs) already established and working in `backend/shared/tests/test_dynamodb.py`'s own
+    `store` fixture, rather than inventing a new schema — same index names/key schemas, proven
+    correct there. Verified this was necessary (not a workaround) by confirming
+    `query_by_repo_issue` also depends on `repository_issue-index`, which the plan's literal
+    fixture likewise never created. No credential/secret handling and no architectural decision
+    involved — purely a test-fixture completeness gap in the plan's own literal instruction.
+  - **Addition beyond plan.md's literal 3-test file list, same precedent as Tasks 11/13/17's
+    proactive coverage-gap closures — flagged, not silent:** the plan's own 3 tests never
+    exercise `list_analyses`'s `repository`+`issue_number` filter branch (lines calling
+    `_store().query_by_repo_issue(...)`), even though it's part of Task 20's own declared
+    interface (`GET /api/analyses?repository=&issue_number=...`). Left uncovered, `analyses.py`
+    sat at 95% (2 lines missed). Added
+    `test_list_filters_by_repository_and_issue_number` (not in the plan's Test file list) to
+    close it — required the GSI fix above to even run, since `query_by_repo_issue` hits
+    `repository_issue-index` the same way `list_recent` hits `recent-index`.
+  - `backend/api` suite: 9/9 passing, **100%** coverage (`--cov=. --cov-report=term-missing`,
+    up from Task 19's 5/5). Repo-wide regression check: `backend/worker` 38/38 (94%),
+    `backend/shared` 12/12 (100%), `mcp-server` 17/17 (90%) — all unchanged.
+  - `ruff check .`: same `I001`/`UP017` categories as Task 19, plus one new `I001` finding at
+    `app/routes/analyses.py:29` — a direct, expected consequence of Step 3's own literal "append
+    below `create_analysis`" instruction placing a second import block mid-file rather than
+    merging it into the top-of-file imports. Same "leave as-is, verbatim from plan.md" precedent,
+    no new category.
+- **Task 21 (`GET /api/analyses/{id}/report`) ✅**, TDD, implemented verbatim from plan.md — no
+  deviations in the implementation itself.
+  - **No GitHub/MCP calls in this task either** (confirmed by reading the full task text before
+    starting, same check as Tasks 19–20) — only `AnalysisStore.get` and `ReportStore.read_json`/
+    `.presigned_url`. Verified both `ReportStore` methods' real signatures in `backend/shared/s3.py`
+    against the plan's snippet before trusting it — exact match, no staleness.
+  - **DynamoDB fixture checked against Task 20's GSI finding before assuming plan.md's literal
+    copy-paste instruction was complete — this time it genuinely was, confirmed empirically, not
+    assumed.** Step 1 says to copy the fixture verbatim from `test_create_analysis.py` (the
+    *original*, GSI-less table schema — not `test_get_and_list_analyses.py`'s fixed one) plus add
+    an S3 bucket. Checked first whether this task's own two tests call anything requiring a GSI:
+    they only exercise `AnalysisStore.get` (`get_item`), `AnalysisStore.upsert` (`put_item`, via
+    the `POST` helper), and a raw `ddb.update_item` — none of which touch `repository_issue-index`
+    or `recent-index`. Implemented the literal instruction as-is and ran Step 2: RED failed clean
+    (`404`, route not found, both tests) — no `ResourceNotFoundException` this time, confirming
+    the GSI-less fixture is genuinely sufficient here, not another instance of Task 20's gap.
+  - RED-verification traceback shape checked against the Task 18 note both times (Step 2 and
+    while diagnosing) — plain `404`s, no `ModuleNotFoundError`, no `../worker/app/...` — not the
+    app-package collision.
+  - No credential/secret handling and no architectural decisions in this task.
+  - **Addition beyond plan.md's literal 2-test file list, same precedent as Tasks 11/13/17/20:**
+    the plan's own two tests never exercise `get_report`'s "analysis doesn't exist" branch, even
+    though Task 21's own **Interfaces** line explicitly declares it ("404 if the analysis itself
+    doesn't exist") — left `analyses.py` at 98% (1 line missed). Added
+    `test_returns_404_for_unknown_id` to close it.
+  - `backend/api` suite: 12/12 passing, **100%** coverage (up from Task 20's 9/9). Repo-wide
+    regression check: `backend/worker` 38/38 (94%), `backend/shared` 12/12 (100%), `mcp-server`
+    17/17 (90%) — all unchanged.
+  - `ruff check .`: same `I001`/`UP017` categories as Tasks 19–20, plus one new `I001` at
+    `app/routes/analyses.py:51` — same mid-file "append" import pattern as Task 20's finding, not
+    a new category.
+- **Task 22 (`POST /api/analyses/{id}/github-issue`) ✅ — the last Phase 4 task, and by far the
+  one with the most real findings, some fixed, one left open and unresolved.**
+  - **Tool-name staleness, plan-directed (not silent) — same class as Task 11's:** plan.md's own
+    Task 22 text explicitly flags its literal `"create_issue"` snippet as STALE ("Task 8
+    confirmed it doesn't exist; `issue_write(method='create')` is the substitute") and instructs
+    implementing the correction, not the literal code. Implemented `call_github_tool("issue_write",
+    method="create", owner=owner, repo=repo, ...)` accordingly. Cross-checked against
+    design.md §5.2's substitute-tool table directly (not just the plan's inline comment) before
+    trusting it — table entry matches exactly.
+  - **`structured_content` fix applied, same established precedent as Task 11's
+    `mcp_clients.py`:** `backend/api/app/mcp_client.py` parses `content[0].text` as JSON instead
+    of relying on `result.structured_content` (which design.md §5.2 documents as `None` for this
+    server's dict-returning tools) — matches `backend/worker/app/mcp_clients.py`'s
+    already-established, working fix exactly.
+  - **Real verification performed, not assumed, for the plan's explicitly-flagged "unconfirmed"
+    response shape:** design.md §5.2 says `issue_write(method="create")`'s success response
+    shape — specifically whether it returns `html_url` — was never confirmed during Task 8
+    (avoided creating a real GitHub issue, same no-side-effects policy applied again here).
+    Verified without any live API call or credential: extracted the actual installed
+    `ghcr.io/github/github-mcp-server:latest` binary (`docker cp` from a stopped container, no
+    network calls) and grepped its embedded UI bundle for the `issue_write` tool's own
+    first-party React widget (`appName: "github-mcp-server-issue-write"`) — found
+    `let s=e.html_url||e.url||e.URL||"#"` as the primary link the widget renders after a
+    successful create/update, i.e. GitHub's own UI code confirms the response includes
+    `html_url`. This satisfies plan.md's explicit instruction ("must be verified for real (or
+    against the installed image's docs) before Task 22 ships, don't assume") via the "installed
+    image's docs" path, with zero side effects and no token needed. Implemented
+    `result["html_url"]` as the plan's snippet already assumed — no code change needed here,
+    just verification that it's safe to trust.
+  - **Significant finding, NOT resolved — flagged for the user's decision, not silently
+    applied either way:** live-tested the real `github-mcp-server` container's HTTP mode
+    directly (`curl`-equivalent POST to `/mcp` with no `Authorization` header) and got a clean
+    `401 Unauthorized`, confirming design.md §5.2's own documented finding that HTTP mode
+    requires a per-request `Authorization: Bearer <token>` header (the `GITHUB_PERSONAL_ACCESS_TOKEN`
+    env var alone doesn't authenticate requests). **This is in direct, unresolved tension with
+    design.md §9's own explicit secrets boundary: "GitHub token mounted only in
+    `mcp-github`/`mcp-test-analysis`... Neither reaches `api` or `frontend`."** `backend/api`
+    cannot both (a) never hold the GitHub token and (b) send a per-request Bearer token that
+    only it could supply. Also discovered, while investigating this, that **`backend/worker`'s
+    already-merged `call_github_tool`/`_call_once` (Task 11, Phase 3) has the exact same gap** —
+    it never sends an Authorization header either (confirmed by reading
+    `backend/worker/app/mcp_clients.py` in full — no `Authorization`/`Bearer` anywhere in that
+    file; only `requirement_retriever.py`'s *separate* direct-REST body-fetch call sends one).
+    Neither worker's `request_validator`'s `search_repositories` call nor
+    `requirement_retriever`'s `issue_read`/`get_comments` call would authenticate successfully
+    against the real server as currently written — this was never caught before because every
+    existing test (worker's and this session's new `backend/api` ones) mocks the MCP transport
+    boundary (`streamable_http_client`/`ClientSession`), so a missing auth header never surfaces
+    as a test failure, only against a real server. **Implemented Task 22's `mcp_client.py`
+    without an Authorization header, matching both plan.md's own literal snippet and the stated
+    "Neither reaches api" secrets boundary** — this is the more conservative choice (doesn't
+    introduce new credential handling into `api` unilaterally) but means
+    `POST /api/analyses/{id}/github-issue` will currently 401 against the real `mcp-github`
+    server as deployed, same as worker's two MCP-routed GitHub calls would. Resolving this for
+    real needs an infrastructure-level decision (e.g. a sidecar/gateway that injects the bearer
+    token in front of `mcp-github`, keeping the raw token out of `api`'s/`worker`'s own process;
+    or revisiting the "Neither reaches api" boundary) — likely a Phase 6 (Terraform)/Phase 7
+    (k8s) concern, not a single backend task's code change. **Not fixed in this branch; explicitly
+    flagged here and in Current State above for a deliberate decision, not silently worked
+    around either by adding the header (violates the stated boundary) or ignoring the finding.**
+  - **Real bug found and fixed, confirmed empirically via an actual `docker build` + module
+    import check (same verification discipline as Task 17's Dockerfile check) — not just
+    written and trusted:** `backend/api/pyproject.toml` never listed the `mcp` SDK as a
+    dependency (no earlier Phase 4 task needed it; Task 22's `mcp_client.py` is the first). It
+    worked in this session's own `.venv` only because `mcp` was already present there
+    transitively (pulled in by the already-installed `testscope-worker`/`testscope-mcp`
+    packages) — masking the gap completely in local dev. Building the real Docker image and
+    running `python -c "import app.main; import app.mcp_client; ..."` inside it (a clean,
+    isolated environment with only `backend/api`'s own declared dependencies) reproduced a
+    genuine `ModuleNotFoundError: No module named 'mcp'`. **Fixed:** added `"mcp>=2.0,<3.0"` to
+    `backend/api/pyproject.toml`'s dependencies — deliberately matching `mcp-server/pyproject.toml`'s
+    already-corrected pin, **not** `backend/worker/pyproject.toml`'s `"mcp>=1.1"`, since
+    design.md's own SDK version note explicitly documents that unpinned-major-version pin as the
+    root cause of Task 8's breaking-change surprise (`mcp` 1.x → 2.0 changed `FastMCP`,
+    `streamablehttp_client`'s tuple arity, `Tool.inputSchema`, and more) — reusing the
+    already-corrected, narrower pin rather than repeating a known mistake. Re-ran `docker build`
+    + the import check after the fix: clean pass, no errors. Re-ran the full local test suite
+    afterward too (16/16, 100%) to confirm the dependency addition didn't disturb anything.
+  - **No GSI needed for this task's fixture, confirmed by checking what the task's own DB calls
+    require before assuming either Task 20's or Task 21's schema style applied** (per the user's
+    explicit ask) — same as Task 21: only `AnalysisStore.get`/`.upsert` (via the `POST` helper)
+    and a raw `ddb.update_item`, no `list_recent`/`query_by_repo_issue`. Used the plain,
+    GSI-less schema; RED failed clean (`404`/`AttributeError`, both expected-reason failures)
+    confirming this was correct, not another instance of Task 20's gap.
+  - **RED-verification traceback shape checked against the Task 18 collision note at every
+    step** — plain `404`s and one `AttributeError` (attribute not yet defined, since
+    `mcp_client.py` didn't exist yet when the test's `patch(...)` call ran) — no
+    `ModuleNotFoundError`, no `../worker/app/...`, not the collision.
+  - **Credential/secret handling — flagged explicitly, not silently applied:** this is the
+    first task in `backend/api`'s history to touch GitHub-related code at all. As implemented,
+    `backend/api` still holds **zero** credentials (no `GITHUB_TOKEN`, no change to `Settings`)
+    — consistent with design.md §9's stated boundary. The credential-handling question that
+    *is* open is the unresolved auth-header gap above, not anything actually added to `api` in
+    this branch.
+  - **Addition beyond plan.md's literal 2-test file list, same precedent as Tasks
+    11/13/17/20/21:** added `test_returns_404_for_unknown_id` to `test_create_github_issue.py`
+    (the plan's own 2 tests never exercise the "analysis doesn't exist" branch) and a new
+    `tests/test_mcp_client.py` with one transport-boundary test
+    (`test_call_github_tool_parses_json_text_payload_over_the_real_mcp_transport`, mirroring
+    worker's own `test_call_once_parses_json_text_payload_over_the_real_mcp_transport` from
+    Task 11) — the plan's own Step 5 bar ("≥80% coverage on `app/`") was already met at 95%
+    without either addition, but `mcp_client.py`'s real transport/parsing logic was at 0% direct
+    coverage (every route test mocks it at the boundary), the same class of gap this session has
+    consistently closed rather than leaving on the table.
+  - `backend/api` suite: 16/16 passing, **100%** coverage on `app/` (plan's own bar was ≥80%).
+    Repo-wide regression check: `backend/worker` 38/38 (94%), `backend/shared` 12/12 (100%),
+    `mcp-server` 17/17 (90%) — all unchanged.
+  - `ruff check .`: same `I001`/`UP017` categories as Tasks 19–21, plus one new category —
+    `SIM117` (nested `with` statements) in `app/mcp_client.py:7` — confirmed this is **not** a
+    new class of finding by checking `backend/worker/app/mcp_clients.py`, which has the
+    identical nested-`with` transport pattern and the identical, already-unaddressed `SIM117`
+    finding there too. Left as-is, same precedent.
+  - `backend/api/Dockerfile` added (Step 7/8), verified for real: `docker build` succeeded, and
+    `docker run ... python -c "import app.main; import app.mcp_client; import
+    app.routes.analyses; import app.routes.health"` succeeded inside the built image after the
+    `mcp` dependency fix above — full module tree wires up correctly in the actual container,
+    not just the dev `.venv`. Verification image removed after confirming.
+
+**Recommendation: a Phase 4 health check is warranted before merging, same as Phase 3's.**
+Reasoning: (1) there is a real, **unresolved** architectural/credential gap (GitHub token
+custody vs. required per-request Bearer auth) that means the final task's entire feature
+(`POST /api/analyses/{id}/github-issue`) will not work against the real `mcp-github` server as
+currently deployed — this needs a deliberate decision recorded, not to be merged over silently.
+(2) Every Phase 4 task's tests use their own separate `client` fixture with independently
+provisioned (and, per Task 20's finding, sometimes incomplete) AWS resources — nothing in this
+phase exercises the full request lifecycle (create → get → list → report → github-issue) in one
+continuous flow against a single, fully-provisioned table, the way Phase 3's Task 17 E2E test
+did for the worker. (3) This session already found and fixed three real, empirically-confirmed
+gaps that inspection alone would have missed (Task 20's missing GSIs, Task 22's missing `mcp`
+dependency, Task 22's stale tool name) purely by *actually running things* rather than trusting
+snippets — suggesting a dedicated, fresh-eyes pass (matching Phase 3's health-check format) is
+cheap insurance before merging a 5-task, first-ever-build-of-this-service phase, consistent with
+the same reasoning Phase 3's own health-check recommendation gave.
+
+### Phase 4 health check (post-Task 22, pre-merge) — ✅ run, no new blocking findings
+
+- **Full `backend/api` suite: 16/16 passing across 3 repeated runs (100% coverage on `app/`,
+  stable, no flakiness).** Repo-wide regression check, also run 3x each: `backend/worker` 38/38
+  (94%), `backend/shared` 12/12 (100%), `mcp-server` 17/17 (90%) — all stable, all unaffected by
+  this branch.
+- **State-of-branch audit, fresh grep/read pass (independent of each task's own inline
+  claims) — clean, no gaps found:**
+  - All 5 tasks' files present and accounted for (`schemas.py`, `main.py`, `routes/health.py`,
+    `routes/analyses.py`, `mcp_client.py`, `Dockerfile`, plus 6 test files) — confirmed via a
+    fresh `find` and a `git diff --stat main...feature/phase-4-backend-api` (14 files changed,
+    exactly Phase 4's scope, nothing stray).
+  - Zero `TODO`/`FIXME`/`XXX`/`HACK` markers anywhere in `backend/api`.
+  - Zero stale `create_issue` references anywhere (the corrected `issue_write` name is used
+    consistently in both the implementation and its test).
+  - `structured_content`/`structuredContent` appears exactly once, in a comment explaining why
+    it's *not* used — no leftover reliance on it anywhere in actual code.
+  - `mcp>=2.0,<3.0` present in `backend/api/pyproject.toml`, matching `mcp-server`'s
+    already-corrected pin (not `worker`'s stale `mcp>=1.1`).
+  - GSI usage in test fixtures is consistent with each task's own DB calls: only
+    `test_get_and_list_analyses.py` (the only file whose tests call `list_recent`/
+    `query_by_repo_issue`) has `GlobalSecondaryIndexes` in its table setup; the other four
+    fixtures correctly use the plain schema.
+  - Working tree clean; only this doc's own health-check edit is uncommitted at write time.
+  - **Runtime route-table check, not just file inspection:** built a live `TestClient`, hit
+    `/openapi.json`, and confirmed all 6 real endpoints from Tasks 18–22 are registered exactly
+    once each with the correct methods (`POST/GET /api/analyses`, `GET /api/analyses/{id}`,
+    `GET /api/analyses/{id}/report`, `POST /api/analyses/{id}/github-issue`, `GET /health/live`,
+    `GET /health/ready`) — the whole module tree wires together correctly at runtime, not just
+    on paper.
+- **The GitHub-auth architectural gap is now recorded in two places, not just buried in one
+  task's narrative:** the detailed reasoning stays in the Task 22 entry above, and a concise,
+  explicit, forward-looking entry was added to **"Open Questions / Things to Revisit"** below
+  (the doc's own dedicated section for exactly this kind of standing follow-up) — clearly
+  labeled **"KNOWN FOLLOW-UP TASK, not yet scheduled to a phase"**, stating plainly that
+  `POST /api/analyses/{id}/github-issue` is not functional against the real `mcp-github` server
+  pending an infra-layer fix (most likely a token-injecting sidecar/gateway in front of
+  `mcp-github`, keeping both `api` and `worker` token-free), that the same gap independently
+  affects two of `backend/worker`'s already-merged GitHub calls (Task 11), and that this belongs
+  to Phase 6/7, not a single backend task. Not silently implicit.
+- **Secrets check: clean.** Grepped `backend/api` for token-like patterns
+  (`ghp_`/`github_pat_`/`AWS_SECRET`/inline `api_key=`/`token=` literals) — none found. No
+  `.env`/`.env*` files anywhere in the repo. No `GITHUB_TOKEN` reference anywhere in
+  `backend/api` (correct — it's never supposed to hold one). Scanned this branch's full
+  `git log -p` diff against `main` for secret-shaped strings (`ghp_`, `github_pat_`, a raw
+  `Bearer <20+ char token>`, AWS access-key patterns) — none found. **This session never
+  actually used a real GitHub token at any point** — the 401 check that surfaced the auth-header
+  finding was a deliberately *unauthenticated* request against the live `github-mcp-server`
+  container, proving the requirement without ever touching a real credential (unlike Task 8's
+  disposable-PAT verification, no token was needed here at all). Two harmless, non-secret debug
+  artifacts from earlier in this session were found and removed as routine hygiene: a
+  `/tmp/debug_test.py` `sys.meta_path` dump (Task 18's collision investigation) and a stale
+  `.pyc` for a since-deleted debug test file — neither contained anything sensitive. No leftover
+  Docker containers, images, or extracted binaries from any of this session's live-server
+  verification work.
+- **"Run it for real" checks, deliberately going beyond the task-level test suites — this is
+  where Task 20's GSI gap and Task 22's missing dependency were actually caught, so the same
+  discipline was repeated here rather than trusting the suites alone:**
+  1. **Docker build + live HTTP requests against the running container** (not just a module
+     import check like Task 17's/Task 22's own verification): built the image, ran it with
+     `docker run -p ...`, and hit real endpoints with `curl` — `/health/live` and `/health/ready`
+     both `200`, `/openapi.json` lists all 6 routes correctly, `POST /api/analyses` with a bad
+     payload correctly returns FastAPI's standard `422` (not a crash), and
+     `GET /api/analyses/does-not-exist` correctly reaches real `app/routes/analyses.py` code
+     (confirmed via the traceback) before failing on `botocore.exceptions.NoCredentialsError` /
+     `NoRegionError` — expected and correct, since this bare smoke-test container has no AWS
+     region/credentials configured at all (real deployment gets both from the EC2 instance
+     profile per design.md §9). The traceback's only application-code frame is the `_store().get()`
+     call site itself; everything past that is stock `botocore` — confirms no hidden defect in
+     `backend/api`'s own code, just the absence of AWS config in an intentionally bare container.
+  2. **Fresh, fully isolated venv — not the shared dev `.venv`** — containing *only*
+     `backend/shared` and `backend/api`'s own declared dependencies (no `testscope-worker`/
+     `testscope-mcp` installed at all, so nothing could transitively mask a missing dependency
+     the way the `mcp` gap was hidden before): `pip install -e backend/shared && pip install -e
+     "backend/api[dev]"` into a brand-new venv, then `import app.main; import app.mcp_client; ...`
+     — clean. Ran the full suite in that same isolated venv: 16/16 passing, 100% coverage — full
+     confirmation `pyproject.toml`'s dependency list is now genuinely complete and self-sufficient,
+     not just "complete enough to pass in an environment with other packages' transitive installs
+     still present."
+  3. **Directly verified, not just reasoned about, a behavior this session had only inferred
+     from pydantic's documented default:** `_to_status_response`'s reliance on pydantic v2's
+     default `extra="ignore"` behavior to safely drop `AnalysisRecord`'s `s3_report_key`/
+     `tool_call_trace`/`user_feedback` fields (none of which `AnalysisStatusResponse` declares)
+     had never actually been exercised by any test against a record with `s3_report_key` set —
+     Tasks 21/22's tests that populate it call `/report`/`/github-issue`, not
+     `GET /api/analyses/{id}`. Constructed a record with all three extra fields populated and
+     called `_to_status_response` directly: clean conversion, no error, extra fields dropped as
+     expected. Closes a previously-assumed-but-unverified corner.
+  - **No new latent gaps found** beyond the already-documented, already-flagged GitHub-auth
+    architectural question — every other check (build, live HTTP, isolated-venv import/test run,
+    the pydantic corner case) came back clean.
+- **Verdict: Phase 4 is sound and safe to merge from a code-correctness standpoint.** All tests
+  pass, stably, across repeated runs and in a fully isolated environment; the branch's file state
+  is consistent with no stray or stale artifacts; secrets handling is clean; and the Dockerfile
+  builds and serves real traffic correctly. **The one open item — GitHub MCP authentication —
+  is a known, clearly-documented, deliberately-unresolved architectural gap, not a code defect
+  in this branch, and not something any amount of further `backend/api` code changes could fix
+  alone** (it needs an infra-layer decision spanning `api`, `worker`, and the `mcp-github`
+  deployment itself). Recommend merging Phase 4 as-is and tracking the GitHub-auth fix as its
+  own explicitly-scheduled follow-up (flagged in "Open Questions" below) rather than blocking
+  this merge on an infrastructure phase that hasn't started yet.
+
 ---
 
 ## Open Questions / Things to Revisit
@@ -620,3 +1015,26 @@ bug could even surface, and it's cheap to double-check now versus after merge.
   Net: the `fix/venv-isolation` PR's outcome (require `.venv`, check `which python` first)
   was the right call, just for this more precise reason — not "system Python pollution,"
   but "silent fallback to an unrelated pre-existing toolkit masking a missing venv."
+
+- **KNOWN FOLLOW-UP TASK, not yet scheduled to a phase: `POST /api/analyses/{id}/github-issue`
+  is not functional against the real `mcp-github` server as currently deployed** — confirmed by
+  live-testing the real `github-mcp-server` container (HTTP mode), which returns `401
+  Unauthorized` without a per-request `Authorization: Bearer <token>` header. `backend/api`
+  cannot supply that header without holding the GitHub token itself, which would violate
+  design.md §9's explicit secrets boundary ("GitHub token mounted only in
+  `mcp-github`/`mcp-test-analysis`... Neither reaches `api` or `frontend`"). Full detail,
+  reasoning, and options in the Phase 4 Task 22 entry above. **The same gap independently
+  affects `backend/worker`'s already-merged `call_github_tool` (Task 11, Phase 3)** —
+  `request_validator`'s `search_repositories` call and `requirement_retriever`'s
+  `issue_read`/`get_comments` call have the identical missing-Authorization-header problem, never
+  caught because every existing test (worker's and `backend/api`'s) mocks the MCP transport
+  boundary rather than hitting a real server. **Needs an infra-layer fix — most likely a
+  sidecar/gateway in front of `mcp-github` that injects the bearer token per request, keeping the
+  raw token out of both `api`'s and `worker`'s own processes — or a deliberate revision of the
+  "Neither reaches api" boundary if token custody is to be extended.** This is squarely a Phase 6
+  (Terraform)/Phase 7 (Kubernetes manifests) concern, not a single backend code task; recommend
+  scheduling it explicitly when those phases start rather than discovering it again later. Until
+  fixed: `POST /api/analyses/{id}/github-issue` (Task 22), `request_validator` (Task 11), and
+  `requirement_retriever`'s comments fetch (Task 11) will all 401 against a real `mcp-github`
+  deployment, though none of this is visible from any current test suite, all of which pass
+  cleanly by design (mocked transport boundary).
