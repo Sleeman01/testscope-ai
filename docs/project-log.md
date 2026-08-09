@@ -24,10 +24,11 @@ Update this after each phase (or whenever something worth remembering happens).
 complete, merged to `main` via PR #12) → 4 (`backend/api`, Tasks 18–22, complete, merged to
 `main` via PR #13) → 5 (`frontend`, Tasks 23–26, complete, merged to `main` via PR #14) → 6
 (`terraform`, Tasks 27–31) — **Task 27 (`networking` module + `shared` environment scaffolding)
-complete on `feature/phase-6-terraform`, not yet pushed/merged. Pre-work re-verified the
-GitHub-auth follow-up empirically (env var alone is insufficient; see the Open Questions entry)
-before starting. `terraform init && terraform validate` both green for the `shared` root; no
-`apply` run (real AWS spend is out of scope until Task 31's documented apply order).**
+complete. Task 28 (`ec2` module — kubeadm control-plane + worker) code complete and validated,
+**apply intentionally not run yet** — awaiting explicit user go-ahead on real AWS spend (this
+machine has live, working AWS credentials). Both on `feature/phase-6-terraform`, not yet
+pushed/merged. Pre-work re-verified the GitHub-auth follow-up empirically (env var alone is
+insufficient; see the Open Questions entry) before starting Task 27.**
 **Branch pattern in use:** `feature/phase-<N>-<short-description>`, one PR per phase (docs-only
 housekeeping like this entry uses `docs/<short-description>` instead)
 **Current branch:** `feature/phase-6-terraform` (cut fresh from `main` after confirming PR #14
@@ -1327,6 +1328,60 @@ cases, no duplication of each page's own already-existing coverage.
     recommendation), `.terraform/`'s downloaded provider binaries are not (already gitignored).
   - No credential/secret handling — this task never touches the GitHub-auth question at all
     (that's Task 28+/Phase 7 territory); no AWS credentials were used since no `apply` ran.
+
+### Task 28 (`ec2` module — control-plane + worker via kubeadm) — code complete, validated, **apply not yet run — awaiting user go-ahead on real AWS spend**
+
+- Created `terraform/modules/ec2/{main,variables,outputs}.tf` +
+  `cloud-init-{control-plane,worker}.yaml.tpl`; wired `module "ec2"` into
+  `terraform/environments/shared/main.tf` alongside Task 27's `networking` module, per plan.md.
+- **Three plan-snippet bugs found, all confirmed empirically via `terraform init`/`validate`
+  against the literal snippets first, not by inspection:**
+  1. & 2. **Same class of bug as Task 27's two findings, reproduced fresh here:**
+     `ec2/variables.tf`'s `instance_type` used a comma-separated single-line block
+     (`variable "instance_type" { type = string, default = "t3.large" }`) — invalid HCL,
+     confirmed via `Error: Invalid single-argument block definition` pointing at the exact line.
+     Fixed the same way as Task 27 (one argument per line, values unchanged). This is now the
+     second phase-6 task with this exact mistake in the plan's own condensed one-liner
+     presentation — worth expecting again in Tasks 29/30.
+  3. **New bug class, only catchable by provider-schema validation, not syntax
+     inspection:** `local_sensitive_file.ssh_private_key` used `file_permissions` (plural) —
+     `terraform validate` (which loads the initialized `local` provider's real schema, not just
+     HCL grammar) failed with `Error: Unsupported argument ... Did you mean "file_permission"?`.
+     Fixed by renaming to the singular `file_permission`, value (`"0600"`) unchanged. This
+     wouldn't have been caught by `terraform fmt` or syntax review alone — only by actually
+     initializing the provider and validating against its schema, same "run it for real, don't
+     just read it" discipline as every prior phase's health checks.
+- **Plan-list inaccuracies, flagged rather than silently resolved:**
+  - Task 28's Files list says "Modify: `terraform/environments/shared/main.tf`, `variables.tf`"
+    but Step 4 only shows a `main.tf` diff — no new root variable is actually needed for the
+    `ec2` wiring (`instance_type` has a module-level default; `public_subnet_id`/
+    `security_group_id` come from `module.networking`'s own outputs, not new user-supplied
+    variables). Left `shared/variables.tf` unchanged rather than inventing an unneeded variable.
+  - Step 4 also says to append `*.pem` and the specific
+    `terraform/environments/shared/testscope-k8s-keypair.pem` path to `.gitignore` — both are
+    already fully covered by the `*.pem` line Task 27 added (see Task 27 entry above). Skipped
+    re-adding to avoid a duplicate/redundant line; `git check-ignore` behavior is unchanged
+    either way.
+- **Noted, not acted on (per the user's explicit instruction — this is the same unconstrained
+  `aws` provider flagged in Task 27, still not pinned by any task's plan text):** `terraform init`
+  in this task's own directory re-resolved `hashicorp/aws` — landed on the same `v6.58.0` as
+  Task 27's init (no drift observed between the two), alongside `random v3.9.0`/`tls v4.3.0`/
+  `local v2.9.0` all still satisfying their `~>` constraints. Not a version bump made or
+  requested — just confirming the earlier flag hasn't silently become a problem yet.
+- **Validation:** `terraform init && terraform validate` — `Success! The configuration is
+  valid.` `terraform fmt -check -diff` (informational only) flags the `module "ec2"` block's
+  column alignment, present verbatim in the plan's own snippet — left for Task 31.
+- **Explicitly not run: `terraform plan` or `terraform apply`.** This machine has real, live AWS
+  credentials configured (`~/.aws/credentials`; `aws sts get-caller-identity` resolves to a real
+  account) — per the user's explicit instruction, no command that would touch that account (even
+  a read-only `plan`) runs until the user has seen the exact resource list/cost estimate and
+  given explicit go-ahead. `admin_cidr` also has no default and isn't yet supplied, which would
+  block a non-interactive `plan`/`apply` anyway.
+- Cluster-convergence verification (Step 5: SSH in, confirm both nodes `Ready`, ingress-nginx
+  `hostNetwork` took effect, metrics-server running) **not yet performed** — depends on `apply`
+  actually running first. Will be a separate log entry once that happens.
+- Code committed on `feature/phase-6-terraform` (module + wiring only — no state, no `.pem` key,
+  nothing apply-generated, since nothing has been applied).
 
 ---
 
