@@ -23,11 +23,13 @@ Update this after each phase (or whenever something worth remembering happens).
 (`backend/shared`, Task 9, complete, merged to `main`) → 3 (`backend/worker`, Tasks 10–17,
 complete, merged to `main` via PR #12) → 4 (`backend/api`, Tasks 18–22, complete, merged to
 `main` via PR #13) → 5 (`frontend`, Tasks 23–26) — **all 4 tasks (23–26) complete on
-`feature/phase-5-frontend`, not yet merged. `frontend/index.html` (a plan gap — no task created
-it) added out-of-band per the user's decision; `npm run build` and the `frontend/Dockerfile`
-(built + run + curl-verified) are both fully green end-to-end. Phase 5 self-check run (see entry
-below) — recommendation: skip a dedicated health check, risk profile is much smaller than
-Phase 3/4's; one small optional gap noted (no `<App />`-level routing integration test).**
+`feature/phase-5-frontend`, pushed to `origin`, not yet merged (user will open/merge the PR
+themselves). `frontend/index.html` (a plan gap — no task created it) added out-of-band per the
+user's decision; `npm run build` and the `frontend/Dockerfile` (built + run + curl-verified) are
+both fully green end-to-end. Phase 5 self-check run (see entry below) — decision: skip a
+dedicated health check (risk profile much smaller than Phase 3/4's), close the one flagged gap
+(no `<App />`-level routing integration test) as targeted insurance instead — done, see the
+"Decision" note at the end of the Phase 5 section.**
 **Branch pattern in use:** `feature/phase-<N>-<short-description>`, one PR per phase (docs-only
 housekeeping like this entry uses `docs/<short-description>` instead)
 **Current branch:** `feature/phase-5-frontend` (cut fresh from `main` after confirming PR #13
@@ -49,13 +51,14 @@ main` looked like Phase 3 was still unmerged until `git fetch origin main` + `gi
 Flagging per CLAUDE.md's "don't rely solely on the log's claims" rule — this wasn't the log
 being wrong, it was the local clone being stale, but the same verify-before-trusting principle
 applied.
-**frontend test suite (Tasks 23–26):** 6/6 passing (`npm test` from `frontend/`, Vitest) — the
-pre-existing smoke test, 2 `client.test.ts` cases, 1 `Home.test.tsx` case, 1 `Results.test.tsx`
-case, and 1 `History.test.tsx` case. `npm run build` (`tsc -b && vite build`) is fully green
-end-to-end; `frontend/Dockerfile` builds and serves real HTTP traffic (verified via `docker run`
-+ `curl`). Repo-wide regression check: `backend/worker` 38/38, `backend/shared` 12/12,
-`backend/api` 16/16,
-`mcp-server` 17/17 — all unchanged from Phase 4's baseline.
+**frontend test suite (Tasks 23–26 + routing smoke test):** 9/9 passing (`npm test` from
+`frontend/`, Vitest, across 6 files) — the pre-existing smoke test, 2 `client.test.ts` cases, 1
+`Home.test.tsx` case, 1 `Results.test.tsx` case, 1 `History.test.tsx` case, and 3
+`App.test.tsx` cases (real-router routing smoke test, added in place of a full Phase 5 health
+check). `npm run build` (`tsc -b && vite build`) is fully green end-to-end; `frontend/Dockerfile`
+builds and serves real HTTP traffic (verified via `docker run` + `curl`). Repo-wide regression
+check: `backend/worker` 38/38, `backend/shared` 12/12, `backend/api` 16/16, `mcp-server` 17/17 —
+all unchanged from Phase 4's baseline.
 **mcp-server test suite:** 17/17 passing, 90% coverage (`--cov=. --cov-report=term-missing`
 from `mcp-server/`), comfortably above the 80% target.
 **backend/shared test suite (Task 9):** 12/12 passing, 100% coverage (`--cov=. --cov-report=term-missing`
@@ -1235,6 +1238,25 @@ default:**
   not a silent state-corruption bug) — flagging it as optional, cheap insurance if extra
   confidence is wanted (one small `App.test.tsx` rendering `<App />` inside a `MemoryRouter` and
   clicking through), not a blocker for merging as-is.
+
+**Decision: skip the full health check, close the one flagged gap as targeted insurance
+instead.** Added `frontend/src/App.test.tsx` (3 cases) — renders the real `App` (its actual
+`BrowserRouter`/`Routes` tree, not a re-declared route list) via `window.history.pushState(...)`
++ `render(<App />)`, so the paths exercised are whatever `App.tsx` really has, not a copy that
+could drift from it. Covers: mounts cleanly and renders `Home` at `/`; renders `Results` at
+`/analyses/:id`, confirming the `:id` param reaches `getAnalysis` (mocked, since this is a
+routing check, not a re-test of `Results`' own already-covered rendering logic); renders
+`History` at `/history`. **Sanity-checked that the test actually catches breakage, not just that
+it passes:** temporarily mangled `/analyses/:id` to `/wrong-path/:id` in `App.tsx`, re-ran — the
+new test failed exactly as expected (the `getAnalysis` call never happened, so `waitFor` timed
+out); reverted (`git diff` on the file came back empty afterward, confirming a clean revert) and
+re-ran to confirm green again. Deliberately minimal, per the user's ask — one file, a handful of
+cases, no duplication of each page's own already-existing coverage.
+- `frontend` suite: **9/9 passing** across 6 files (up from Task 26's 6/6 — this test file adds 3
+  cases). `npm run build` still fully green end-to-end. Repo-wide regression check (re-run once
+  more before push, per the user's ask): `backend/worker` 38/38, `backend/shared` 12/12,
+  `backend/api` 16/16, `mcp-server` 17/17 — all unchanged.
+- No credential/secret handling, no new dependencies.
 
 ---
 
