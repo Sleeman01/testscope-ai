@@ -25,8 +25,8 @@ complete, not yet merged
 **Branch pattern in use:** `feature/phase-<N>-<short-description>`, one PR per phase (docs-only
 housekeeping like this entry uses `docs/<short-description>` instead)
 **Current branch:** `feature/phase-3-backend-worker` (cut from `main` after Phase 2's merge;
-not yet merged). Tasks 10 and 11 done on this branch — do NOT start Task 12 without the user's
-explicit go-ahead (Phase 3 has 8 tasks total, Task 10 through Task 17).
+not yet merged). Tasks 10, 11, and 12 done on this branch — do NOT start Task 13 without the
+user's explicit go-ahead (Phase 3 has 8 tasks total, Task 10 through Task 17).
 **Last merged:** Phase 2 (Task 9, `backend/shared`) → `main`.
 **mcp-server test suite:** 17/17 passing, 90% coverage (`--cov=. --cov-report=term-missing`
 from `mcp-server/`), comfortably above the 80% target.
@@ -34,11 +34,12 @@ from `mcp-server/`), comfortably above the 80% target.
 from `backend/shared/`). Re-verified after Task 10's `pyproject.toml` fix (see Phase 3 entry
 below) — still 12/12, 100%; re-verified again via a fresh uninstall/reinstall from outside
 `backend/shared` before starting Task 11 (see Phase 3 entry below).
-**backend/worker test suite (Tasks 10–11):** 18/18 passing, 84% overall coverage
-(`--cov=. --cov-report=term-missing` from `backend/worker/`) — every Task 10/11 file at 100%
-except `app/health.py`/`app/main.py`/`app/state.py`, explicitly untested per Task 10's own plan
-text ("not unit tested here — wired end-to-end in Task 17"); not a regression against the 80%
-CI gate (Task 36, not yet built) once those three files are excluded.
+**backend/worker test suite (Tasks 10–12):** 20/20 passing, 85% overall coverage
+(`--cov=. --cov-report=term-missing` from `backend/worker/`) — every Task 10/11/12 node/client
+file at 100% except `app/health.py`/`app/main.py`/`app/state.py` (Task 10, deferred to Task 17
+per the plan's own text) and `app/llm_client.py` (Task 12, deferred to the Task 17/E2E stub-LLM
+test per the plan's own text — "no dedicated `llm_client` test needed"); not a regression
+against the 80% CI gate (Task 36, not yet built) once those four files are excluded.
 **Read before starting Task 12+:** `docs/2026-07-30-testscope-ai-design.md` §5.2 — the GitHub
 MCP tool-name assumptions there were found wrong during Task 8's live verification (see Phase 1
 entry below); Task 11 (Phase 3 entry below) already redesigned `request_validator`/
@@ -284,6 +285,22 @@ no further §5.2 rework needed at the client layer, only new tool names per node
   Same fix pattern as `backend/shared/tests/test_config.py` (`get_settings` is `@lru_cache`d
   across the whole test session, so env vars alone aren't enough without an explicit
   `cache_clear()`).
+- **Task 12 (LLM client wrapper, Requirement Parser node) ✅**, implemented verbatim from
+  plan.md — no staleness found here (unlike Task 11's GitHub tool names). Checked the installed
+  `anthropic` SDK (`0.120.2`, plan pins `anthropic>=0.39`) directly against
+  `AsyncAnthropic.messages.create`'s real signature before implementing, given the `mcp` SDK's
+  own `>=1.1`-pin-resolved-to-a-breaking-major-version experience in Phase 1/Task 11 — no
+  mismatch found (`model`/`messages`/`max_tokens`/`system`/`tools`/`tool_choice` all present as
+  documented). TDD: 2/2 tests from the plan's own Step 1 snippet, verified failing
+  (`ModuleNotFoundError`) then passing unchanged. Full worker suite: 20/20 passing.
+- **No coverage-closing test added for `llm_client.py` (42% coverage, unlike Task 11's
+  `mcp_clients.py`/`requirement_retriever.py` gaps)** — this one is deliberate and pre-declared
+  in the plan's own Task 12 file list ("`call_llm`'s ... Anthropic-specific forced-tool-use
+  behavior is exercised indirectly through every node test that mocks it ... no dedicated
+  `llm_client` test needed") and matches design.md's stated E2E strategy (a stub LLM client
+  returning canned JSON, not live Claude calls, wired in Task 17) — not an accidental gap like
+  Task 11's `_call_once`/`_fetch_issue_body`, which the plan's own snippets left untested without
+  saying so.
 
 ---
 
