@@ -48,3 +48,47 @@ async def test_run_analysis_marks_failed_and_still_cleans_up_on_graph_exception(
     record = store.get("r1")
     assert record.status == "failed"
     assert "boom" in record.error_message
+
+@pytest.mark.asyncio
+async def test_run_analysis_logs_and_returns_when_job_intake_fails(store_env, caplog):
+    # job_intake runs before the try block, and main.py's poll loop has nothing wrapping
+    # asyncio.run(run_analysis(...)) either — an uncaught exception here previously
+    # propagated all the way out and would crash the whole worker process on a single bad
+    # job, instead of design.md's stated "log, ack, skip" behavior for Job Intake failures.
+    with patch("app.runner.job_intake", side_effect=RuntimeError("job_intake boom")), \
+         caplog.at_level("ERROR"):
+        await run_analysis(analysis_id="r2", repository="acme/widgets", issue_number=1, notes=None)
+
+    assert "job_intake boom" in caplog.text
+    assert "r2" in caplog.text
+    store = AnalysisStore(table_name="t")
+    assert store.get("r2") is None  # nothing meaningful to record; skipped entirely
+
+@pytest.mark.asyncio
+async def test_run_analysis_logs_and_returns_when_final_upsert_fails(store_env, caplog):
+    # The finally block's own store.upsert(...) call previously had no exception handling
+    # either — a failure there (e.g. a transient DynamoDB write error, right after a
+    # perfectly good analysis run) would also crash the worker, and would leave the record
+    # stuck at status=running (written earlier by job_intake) with no terminal state ever
+    # recorded — worse for a user than a clean status=failed.
+    call_count = {"n": 0}
+    real_upsert = AnalysisStore.upsert
+
+    def flaky_upsert(self, record):
+        call_count["n"] += 1
+        if call_count["n"] == 1:
+            return real_upsert(self, record)  # job_intake's own upsert succeeds normally
+        raise RuntimeError("final upsert boom")
+
+    with patch("app.runner._graph") as mock_graph, \
+         patch("app.runner.call_test_mcp_tool", new=AsyncMock(return_value={})), \
+         patch.object(AnalysisStore, "upsert", new=flaky_upsert), \
+         caplog.at_level("ERROR"):
+        mock_graph.ainvoke = AsyncMock(return_value={
+            "analysis_id": "r3", "repository": "acme/widgets", "issue_number": 1,
+            "status": "completed", "tool_call_trace": [], "warnings": [], "missing_tests": [],
+        })
+        await run_analysis(analysis_id="r3", repository="acme/widgets", issue_number=1, notes=None)
+
+    assert "final upsert boom" in caplog.text
+    assert "r3" in caplog.text
