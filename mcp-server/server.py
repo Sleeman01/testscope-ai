@@ -1,5 +1,7 @@
 import os
+import socket
 import threading
+import time
 from pathlib import Path
 
 import uvicorn
@@ -55,7 +57,22 @@ def build_health_app() -> FastAPI:
     app.get("/health/ready")(lambda: {"status": "ok"})
     return app
 
+def _wait_until_listening(port: int, timeout_seconds: float = 30.0) -> None:
+    """Poll (cheap: no fastapi/uvicorn work) until the main MCP transport is accepting
+    connections, so the health server's own (heavier) uvicorn startup doesn't compete with
+    mcp.run()'s startup for CPU/GIL time in this same process. Falls through on timeout —
+    best-effort sequencing, not a correctness gate; the health app's responses were never
+    MCP-state-aware to begin with (see build_health_app)."""
+    deadline = time.monotonic() + timeout_seconds
+    while time.monotonic() < deadline:
+        try:
+            with socket.create_connection(("127.0.0.1", port), timeout=0.5):
+                return
+        except OSError:
+            time.sleep(0.1)
+
 def _start_health_server(port: int = 8101):
+    _wait_until_listening(int(os.environ.get("MCP_PORT", "8100")))
     uvicorn.run(build_health_app(), host="0.0.0.0", port=port, log_level="warning")
 
 if __name__ == "__main__":
