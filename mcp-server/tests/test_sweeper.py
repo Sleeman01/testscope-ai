@@ -1,6 +1,7 @@
 import time
-from pathlib import Path
+
 from sweeper import start_sweeper
+
 
 def test_sweeper_removes_stale_dirs(tmp_path):
     root = tmp_path / "workspace_root"

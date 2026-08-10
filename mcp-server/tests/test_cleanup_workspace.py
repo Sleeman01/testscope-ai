@@ -1,5 +1,5 @@
-from pathlib import Path
 from tools.cleanup_workspace import cleanup_workspace
+
 
 def test_deletes_existing_workspace(tmp_path):
     root = tmp_path / "workspace_root"

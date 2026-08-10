@@ -1,8 +1,10 @@
 import json
 import os
+
 import httpx2
 from mcp import ClientSession
 from mcp.client.streamable_http import streamable_http_client
+
 
 class GithubClient:
     """Thin MCP client this server uses to call the separately-deployed mcp-github server.
@@ -20,17 +22,19 @@ class GithubClient:
 
     async def get_repo_size_bytes(self, owner: str, repo: str) -> int:
         http_client = httpx2.AsyncClient(headers={"Authorization": f"Bearer {self.github_token}"})
-        async with streamable_http_client(self.base_url, http_client=http_client) as (read, write):
-            async with ClientSession(read, write) as session:
-                await session.initialize()
-                result = await session.call_tool(self.TOOL_NAME, {
-                    "query": f"repo:{owner}/{repo}", "minimal_output": False,
-                })
-                # This server leaves structured_content as None; payload is JSON text
-                # in content[0].text instead (confirmed in Task 8's verification).
-                text = next(b.text for b in result.content if getattr(b, "text", None))
-                items = json.loads(text).get("items", [])
-                if not items:
-                    raise ValueError(f"search_repositories found no match for {owner}/{repo}")
-                size_kb = items[0]["size"]
-                return size_kb * 1024
+        async with (
+            streamable_http_client(self.base_url, http_client=http_client) as (read, write),
+            ClientSession(read, write) as session,
+        ):
+            await session.initialize()
+            result = await session.call_tool(self.TOOL_NAME, {
+                "query": f"repo:{owner}/{repo}", "minimal_output": False,
+            })
+            # This server leaves structured_content as None; payload is JSON text
+            # in content[0].text instead (confirmed in Task 8's verification).
+            text = next(b.text for b in result.content if getattr(b, "text", None))
+            items = json.loads(text).get("items", [])
+            if not items:
+                raise ValueError(f"search_repositories found no match for {owner}/{repo}")
+            size_kb = items[0]["size"]
+            return size_kb * 1024

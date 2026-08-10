@@ -1,8 +1,11 @@
 import json
 from decimal import Decimal
+
 import boto3
 from boto3.dynamodb.conditions import Key
+
 from models import AnalysisRecord
+
 
 def _to_dynamodb_safe(value):
     # boto3 rejects native Python floats for numeric attributes, even nested inside a

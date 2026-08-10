@@ -23,43 +23,35 @@ Update this after each phase (or whenever something worth remembering happens).
 (`backend/shared`, Task 9, complete, merged to `main`) → 3 (`backend/worker`, Tasks 10–17,
 complete, merged to `main` via PR #12) → 4 (`backend/api`, Tasks 18–22, complete, merged to
 `main` via PR #13) → 5 (`frontend`, Tasks 23–26, complete, merged to `main` via PR #14) → 6
-(`terraform`, Tasks 27–31, complete, merged to `main` via PR #15) → 7 (`kubernetes`, Tasks 32–35)
-— **Phase 7 ✅ all 4 tasks complete, health-checked, pushed — not yet merged (PR to be opened by
-the user on GitHub directly, per explicit instruction this phase, not by Claude).** Tasks 32–35
-built the full `kubernetes/base` manifest set (`api`, `worker`, `mcp-test-analysis`, `mcp-github`,
-`frontend`, shared `ConfigMap`, `Ingress`) plus `dev`/`prod` kustomize overlays and a `monitoring`
-namespace placeholder. Task 33 closed the previously-unscheduled GitHub-auth gap (see the Open
-Questions entry below) via an explicit, user-directed architectural decision: an `nginx` sidecar
-in the `mcp-github` pod that injects the `Authorization: Bearer` header `github-mcp-server`'s
-HTTP mode requires, from the same `github-token` Secret — `worker`/`api`/`mcp-test-analysis` stay
-token-free. Real bugs found and fixed along the way: `mcp-github`'s own container was missing the
-`http --port ... --listen-host ...` args (would have crash-looped, same class of issue as Task 8's
-original Docker-invocation finding); `mcp-server`'s flat-layout packaging bug (same class as
-Task 10's `backend/shared` fix, latent since Phase 1, surfaced by reinstalling for the new
-`fastapi`/`uvicorn` dependency); a health-check-thread startup-ordering race that intermittently
-starved `test_mcp_integration.py`'s `sleep(8.0)` budget under full-suite+coverage runs (fixed by
-sequencing, not by touching the sleep constant — verified 6/6 clean afterward); and a `.gitignore`
-gap where `secret.yaml.example`'s own comment claimed a copied `secret.yaml` was gitignored but no
-pattern actually covered it (found in the Phase 7 health check, fixed, repo-wide sweep found
-nothing else). One `fastapi`/`uvicorn` dependency addition to `mcp-server` was explicitly
-surfaced and approved in-chat before being applied (matching existing `backend/api`/
-`backend/worker` pins, no new version introduced). Every task's validation used the same
-substitute (`kubectl kustomize` render + YAML-parse) instead of `kubectl apply --dry-run=client`,
-which cannot reach a live API server from this dev machine — confirmed to be a real environment
-gap (API discovery requires a reachable server even for client-side dry-run; the cluster's 6443
-is intentionally internal-only per design.md §9) — deferred to Phase 8, not resolved. Full detail
-in the Phase 7 and Phase 7 health check entries below.
+(`terraform`, Tasks 27–31, complete, merged to `main` via PR #15) → 7 (`kubernetes`, Tasks 32–35,
+complete, merged to `main` via PR #16 code + PR #17 docs) → 8 (`CI/CD`, Tasks 36–38) — **Phase 8 ✅
+all 3 tasks complete, full regression green, pushed — not yet merged (PR left for the user to
+open/merge directly, per the standing Phase 7 preference).** Tasks 36–38 built the full GitHub
+Actions CI/CD pipeline: `.github/workflows/pr.yml` (Python lint+test matrix across all 4 services,
+frontend lint+test, image build + Trivy scan, summary job), `deploy-dev.yml` +
+`kubernetes/dev/smoke-test.sh` (build/push to GHCR on merge to `main`, self-hosted-runner
+`kubectl apply` + smoke test), and `deploy-prod.yml` + `kubernetes/prod/smoke-test.sh` (same shape,
+tag-triggered, gated on a `production` Environment reviewer). Turning `ruff check .` and image
+scanning into real CI gates for the first time surfaced substantial pre-existing debt that no
+earlier phase's own test suite ever caught (linting had never been wired into any pipeline before);
+all of it was fixed for real rather than gated around — full detail in the Phase 8 entry below,
+including the specific CVE evidence behind the Trivy CRITICAL/HIGH severity split and the
+`nginx:1.27-alpine` → `nginx:1.30-alpine` base image bump. **Two categories of manual
+infrastructure setup are explicit, tracked preconditions for `deploy-dev`/`deploy-prod` to run at
+all — not vague backlog, see the Open Questions entries added this phase — and remain undone as of
+this session's end.**
 **Branch pattern in use:** `feature/phase-<N>-<short-description>`, one PR per phase (docs-only
 housekeeping like this entry uses `docs/<short-description>` instead)
-**Current branch:** `feature/phase-7-k8s-manifests` (cut fresh from `main` after confirming PR #15
-merged — this time local `main` was already in sync with `origin/main`, the first phase where the
-session-start staleness correction wasn't needed). Pushed to origin, confirmed tip SHA matches
-(`92f30b5`, 0 ahead/0 behind) — not merged yet, PR left for the user to open/merge directly.
-**Last merged:** Phase 6 (Tasks 27–31, `terraform`) → `main` via PR #15 (2026-08-10T07:49:59Z).
-Phase 6 had never been pushed/merged as of its own session's final report — corrected at the start
-of the Phase 7 pre-work session (pushed, PR #15 opened and merged, confirmed via `gh pr list`)
-before cutting Phase 7's branch, same verify-before-trusting principle as every prior phase's
-session-start correction.
+**Current branch:** `feature/phase-8-cicd` (cut fresh from `main` after confirming PR #16 + PR #17
+merged). Pushed to origin — not merged yet, PR left for the user to open/merge directly.
+**Last merged:** Phase 7 (Tasks 32–35, `kubernetes`) → `main` via PR #16 (code, merged
+2026-08-10T09:13:45Z) + PR #17 (docs, merged 2026-08-10T09:17:24Z), confirmed via `gh pr list`
+before trusting it.
+**Session-start correction (Phase 8):** local `main` was 9 commits behind `origin/main` (the PR
+#16/#17 merges happened upstream but hadn't been fetched locally). Confirmed via `gh pr list`
+(both shown MERGED) before trusting it, then `git fetch origin` + `git checkout main` +
+`git pull --ff-only origin main` caught it up (`961a920` → `3ded5a7`) before branching Phase 8 off
+of it — same verify-before-trusting principle as every prior phase's session-start correction.
 **Session-start correction:** local `main` was behind `origin/main` by 13 commits (the PR #13
 merge happened upstream but hadn't been fetched locally). Confirmed via `gh pr list` (PR #13
 shown MERGED) before trusting it, then `git fetch origin` + `git checkout main` +
@@ -140,6 +132,22 @@ same substitute-tool-table treatment from scratch — it doesn't inherit Task 11
 - PRs are opened/merged by the user directly on GitHub, not by Claude — explicit as of Phase 7
   (contrast with Phase 6, where Claude ran `gh pr create` without it being flagged as wrong at the
   time; treat "push only, no PR" as the default going forward unless told otherwise).
+- `ruff check .` must pass with zero findings and zero blanket category-ignores across all 4
+  Python services, going forward — explicit as of Phase 8, after turning it into a real CI gate
+  (Task 36) surfaced 10–36 pre-existing findings per service that every earlier phase had
+  individually reviewed and left as "verbatim from plan.md, not worth diverging over a style-only
+  lint rule." Offered a blanket-ignore-list option matching that precedent; the user chose to fix
+  everything instead. Any new lint finding in future phases should be fixed the same way (a real
+  code change, e.g. adding the missing `logger.exception(...)` for `BLE001`), not suppressed —
+  see the Phase 8 entry below for the specific fixes and reasoning applied to each category.
+- CI severity/security gates (Trivy image scans, and by extension similar tooling later) should
+  distinguish "no fix exists upstream" from "a fix exists and we haven't taken it" before deciding
+  what blocks a build — explicit as of Phase 8, after confirming via `trivy image --format json`'s
+  own `Status`/`FixedVersion` fields (not assumed from table output) that base-image CRITICAL
+  findings fell into both categories differently. `--ignore-unfixed` is the mechanism for the
+  former; a version bump (needing the same approval as any dependency change) is the fix for the
+  latter — don't blanket-suppress a whole severity level when some of what it contains is
+  genuinely actionable.
 
 ---
 
@@ -1961,6 +1969,165 @@ cases, no duplication of each page's own already-existing coverage.
 
 ---
 
+### Phase 8 — CI/CD (GitHub Actions) — Tasks 36–38 ✅ complete
+
+- Branch: `feature/phase-8-cicd`, cut from `main` after confirming PR #16 (Phase 7 code) and
+  PR #17 (Phase 7 docs) merged (see Current State's session-start correction above — local `main`
+  was 9 commits behind). Pre-work also confirmed which of the six standing open items applied to
+  this phase's scope: the live-cluster dry-run gap (directly in scope — this is where `deploy-dev`/
+  `deploy-prod` finally reach a live cluster for the first time), the `github-token` Secret
+  convention gap (in scope as a precondition), the missing mcp-github/sidecar probes (not fixed,
+  but flagged as weakening `kubectl wait --for=condition=available`'s signal in the smoke test),
+  the frontend Dockerfile lockfile gap (in scope — Task 36 builds this exact image), the nginx
+  `proxy_pass` static-resolution risk (not this phase's to fix, but exercised for the first time
+  by a real `kubectl apply`), and the `app`/`app` package collision (confirmed not applicable —
+  Task 36's matrix installs one service per isolated job).
+- **Task 36 (`pr.yml`) ✅ — by far the most consequential task this phase: three separate CI gates
+  (`ruff check .`, `npx eslint src`, Trivy image scan) all failed immediately against the current,
+  already-merged repo state when actually run, not just written from the plan's snippet.** Every
+  one was diagnosed empirically (`ruff check . --statistics`, `npx eslint src` run directly,
+  `docker build` + a real local `trivy image` scan) before deciding how to handle it, per this
+  project's standing "run it for real" discipline.
+  - **`ruff check .` failed in all 4 services** (10–36 pre-existing findings each: `I001`,
+    `UP017`, `BLE001`, `SIM117`, `F401`, `S110`, `TRY002`, `UP035`, `UP041`, `ASYNC220`,
+    `ASYNC251`, `F841`, `N999`) — every one previously reviewed phase-by-phase and left in place
+    as "verbatim from plan.md." Offered a blanket-ignore-list option matching that precedent
+    (new standing decision above); **the user chose to fix everything instead, zero ignores.**
+    Fixed for real, not suppressed:
+    - Auto-fixable categories (`I001`, `UP017`, `UP035`, `UP041`, most `F401`) via
+      `ruff check --fix`.
+    - **`BLE001`** (8 sites, all in `backend/worker`): added `logger.exception(...)` calls to
+      `runner.py`'s two flagged sites and five sibling node files (`report_saver`,
+      `request_validator`, `requirement_retriever` ×2, `test_file_classifier`,
+      `test_file_retriever`) that had the identical "broad except, no logging" gap `runner.py`
+      itself was already fixed for in the Phase 3 health check — this rule specifically exempts
+      `except Exception:` blocks that call `logging.exception(...)`, so applying that
+      already-established pattern to its five untouched siblings is a genuine fix, confirmed by
+      re-running `ruff check` clean afterward, not a suppression.
+    - **`S110`** (`runner.py`'s best-effort cleanup `except: pass`): changed to
+      `logger.warning(..., exc_info=True)` — still non-fatal, just no longer silent.
+    - **`SIM117`** (6 sites across `backend/api/app/mcp_client.py`, `backend/worker/app/
+      mcp_clients.py`, `mcp-server/github_client.py`, and 3 test files): merged nested
+      `with`/`async with` blocks into single parenthesized multi-context managers (Python
+      3.10+ syntax, safe given every Dockerfile's `python:3.11-slim` base).
+    - **`TRY002`** (a test helper raising bare `Exception`): changed to `RuntimeError` — the
+      retry-classification logic under test (`_is_retryable_tool_error`) is purely string-based,
+      confirmed this doesn't change test semantics.
+    - **`N999`** (`mcp-server/__init__.py` — invalid module name for the hyphenated directory):
+      deleted. Confirmed via grep it was never imported anywhere and isn't part of the
+      `py-modules` flat-layout config Task 33 already established.
+    - **`ASYNC220`/`ASYNC251`/`F841`** (`mcp-server/tests/test_mcp_integration.py` — the
+      real-subprocess integration test with a documented flakiness history, Task 33's follow-up
+      fix): converted `subprocess.Popen`/`time.sleep` to `asyncio.create_subprocess_exec`/
+      `asyncio.sleep`, dropped an unused `clone_url` binding. Given this file's history, ran it
+      3x alone and 3x as part of the full coverage suite afterward — stable every time, same
+      ~9s runtime, no regression.
+    - Full regression after all fixes: **85/85 tests passing** across all 4 services (12+16+38+19),
+      coverage unchanged (100%/100%/94%/94%).
+  - **`npx eslint src` couldn't run at all** — no `eslint` devDependency, no config file anywhere
+    in the repo. New dependencies surfaced and approved in-chat before being applied:
+    `eslint@^10.8`, `typescript-eslint@^8.66`, `eslint-plugin-react-hooks@^7.1`,
+    `eslint-plugin-react-refresh@^0.5`, `@eslint/js@^10.0`, `globals@^17.9` — plus a minimal flat
+    `eslint.config.js` (recommended rulesets, non-type-aware, no `parserOptions.project`).
+    Running it for real found 5 genuine `no-explicit-any` violations (2 in `client.test.ts`'s
+    `(fetch as any).mockResolvedValue`, 3 in `Results.tsx`'s untyped `.map()` callbacks) — fixed
+    with `vi.mocked(fetch)` and narrow inline types (`CoverageRow`/`MissingTestRow`/`ToolCallRow`)
+    matching exactly the fields already rendered, not new fields. `npm audit` confirmed zero new
+    findings from any of the 6 new packages.
+  - **`npm test -- --coverage` had no coverage provider installed** — `@vitest/coverage-v8@^2.1.9`
+    (version-locked to the installed `vitest@2.1.9`) surfaced and approved in-chat. Its one new
+    `npm audit` entry traces entirely to the already-accepted `vitest` chain (`via: ['vitest']`),
+    confirmed via `npm audit --json`, not a new vulnerability.
+  - **Trivy scan (`severity: CRITICAL,HIGH`, `exit-code: "1"`, as plan.md's own literal snippet)
+    failed all 4 images on the first real local run** — `api` 25, `worker` 25,
+    `mcp-test-analysis` 53, `frontend` 35 CRITICAL+HIGH findings, all in base-image OS packages,
+    not this project's code. Resolved in two rounds, both with the user's explicit direction
+    rather than a default pick:
+    1. First split the single scan step into two — `severity: CRITICAL` blocking
+       (`exit-code: "1"`, no `continue-on-error`) and `severity: HIGH` non-blocking
+       (`exit-code: "0"` + `continue-on-error: true` as a defensive second layer).
+    2. Re-scanning with just that split still failed all 4 images on CRITICAL alone (`api`/
+       `worker`/`mcp-test-analysis` share 4 CRITICAL CVEs from `python:3.11-slim`'s bundled Perl
+       packages; `frontend` had 1, `libcrypto3`/OpenSSL, from `nginx:1.27-alpine`). **Checked
+       each CVE's real `Status`/`FixedVersion` field via `trivy image --format json`, not
+       recalled table output, before treating them as equivalent** — confirmed all 4 Perl CVEs
+       (`CVE-2026-13221`, `CVE-2026-42496`, `CVE-2026-57433`, `CVE-2026-8376`) report
+       `FixedVersion: null` (`Status: affected`/`fix_deferred` — no patch exists to install),
+       while frontend's `CVE-2026-31789` reports `FixedVersion: 3.3.7-r0`, `Status: fixed` — a
+       real fix exists. Added `ignore-unfixed: true` to both Trivy steps (new standing decision
+       above) rather than either leaving CRITICAL fully blocking (would permanently fail on CVEs
+       nobody can act on) or fully non-blocking (would hide the frontend one, which *is*
+       actionable). Rebuilt all 4 images fresh and re-scanned with the exact new settings:
+       `api`/`worker`/`mcp-test-analysis` **PASS** (0 findings), `frontend` **FAIL** (still
+       exactly `CVE-2026-31789`, confirmed nothing else slipped through).
+  - **`frontend/Dockerfile`'s `nginx:1.27-alpine` → `nginx:1.30-alpine` base image bump** —
+    approved in-chat after confirming (not assumed): the current pin is genuinely the latest
+    image Docker Hub publishes under that tag (force-repulled, "up to date"), because nginx's
+    `1.27` line no longer receives base-image updates; `nginx:1.30-alpine` (nginx's current
+    "stable" line, same `<major.minor>-alpine` floating-tag convention, still Alpine-based) was
+    confirmed via a direct `trivy image` scan of the base image itself to have zero CRITICAL/HIGH
+    findings and to specifically lack `CVE-2026-31789`. After the bump: rebuilt `frontend`
+    fresh (`--no-cache`), re-ran the exact `pr.yml` Trivy settings against the real built image —
+    **0 vulnerabilities, PASS.** Live-verified with real containers (a built `frontend` image
+    plus a fake `api` upstream on a docker network) that routing/serving is unchanged on the new
+    base: `Server: nginx/1.30.4` header confirms the new version is actually running; `/` → 200,
+    an unknown SPA route → 200 via `try_files`, `/api/health/live` → correctly proxies stripped
+    to `/health/live`, `/api/analyses` → still passes through unchanged.
+  - **Independent, cross-cutting bug found and fixed: `frontend/nginx.conf` had no way to reach
+    `api`'s real health-check routes at all**, discovered while cross-checking Task 37/38's
+    smoke-test target (`http://$HOST/api/health/live`) against design.md §7 and the actual
+    `backend/api` route table. `api`'s health routes are mounted bare (`/health/live`,
+    `/health/ready` — no `/api` prefix, confirmed against `app/main.py` and design.md §7), but
+    the existing `location /api/ { proxy_pass http://api:8000; }` (no trailing slash) forwards
+    the request URI **unchanged** — correct for `/api/analyses` (which already includes `/api`
+    in its own FastAPI route), but it means `/api/health/live` would have reached `api` as the
+    literal path `/api/health/live`, which doesn't exist. Fixed with a more specific
+    `location /api/health/ { proxy_pass http://api:8000/health/; }` block that strips the prefix
+    just for health paths. Verified with live Docker containers before and after: `/api/analyses`
+    still passes through unchanged (not broken by the fix), `/api/health/live`/`/api/health/ready`
+    now correctly reach `api`'s real routes, `/` still serves the SPA. This fix benefits both
+    `deploy-dev.yml` and `deploy-prod.yml`'s smoke tests, not just Task 36.
+- **Task 37 (`deploy-dev.yml` + `kubernetes/dev/smoke-test.sh`) ✅ — one real, confirmed bug in
+  plan.md's own literal snippet.** The per-image tag-update loop re-ran `kubectl kustomize .`
+  fresh on every iteration and overwrote `/tmp/rendered.yaml` each time, so only the **last**
+  image in the loop (`frontend`) ever actually got retagged in what got applied — confirmed
+  empirically by running the literal loop against the real `kubernetes/dev` tree before touching
+  anything (`api`/`worker`/`mcp-test-analysis` stayed on the literal `:latest` placeholder).
+  Fixed by rendering once and chaining all four `sed` substitutions in a single pass; re-verified
+  against the real tree that all four images now retag correctly and the two third-party images
+  (`github-mcp-server`, the `nginx` sidecar) are correctly left untouched. `smoke-test.sh` itself
+  matches the plan verbatim, no bugs found — it depends on the nginx health-proxy fix above to
+  actually pass.
+- **Task 38 (`deploy-prod.yml` + `kubernetes/prod/smoke-test.sh` + `.github/workflows/README.md`)
+  ✅** — same sed-loop fix applied and re-verified against the real `kubernetes/prod` tree
+  (tag-triggered variant using `github.ref_name`). No new bugs found; `smoke-test.sh` is the
+  plan's literal prod-defaults copy of `dev`'s.
+- **Manual infrastructure preconditions — explicitly not attempted, per the user's instruction to
+  stop before anything outside Claude's control.** Documented in `.github/workflows/README.md`
+  and restated as explicit Open Questions entries below (not left only in a workflow comment):
+  self-hosted runner registration (`testscope-k8s` label) + the `/etc/hosts` entry on the
+  control-plane node; the `github-token` Secret in `dev`/`prod` (already a known gap per Phase 7's
+  health check); and a **newly-found gap, not previously flagged anywhere**: `worker`'s Deployment
+  references a `worker-secrets` Secret (`anthropic-api-key` key) that has **no example file at
+  all** in the repo, unlike `github-token`'s `.example` — confirmed via a repo-wide search. The
+  `production` GitHub Environment + required reviewer (Task 38's own precondition) is likewise
+  untouched.
+- **Full regression, re-run repeatedly across this phase's several rounds of changes, stable every
+  time:** `ruff check .` clean in all 4 services; 85/85 Python tests passing (12+16+38+19,
+  coverage unchanged); frontend `eslint` clean, 9/9 tests, `npm run build` green; all 3 kustomize
+  trees (`base`/`dev`/`prod`) still render; all 3 workflow files parse as YAML and pass
+  `actionlint` clean (its only output is the expected, harmless "unknown label `testscope-k8s`"
+  notice on the two deploy workflows — there's nothing to register it against yet). `actionlint`
+  itself caught one real mistake mid-session (a duplicated `exit-code` key left over from an
+  in-place edit) before it reached this log — fixed immediately, re-verified clean.
+- **Verdict: Phase 8 is sound and ready to merge from a code-correctness standpoint.** Nothing
+  about the CI/CD *code* is known to be broken; what remains is entirely the manual infrastructure
+  setup above, which no amount of further workflow-file changes can substitute for. Recommend
+  merging as-is and treating the two manual-precondition items as this phase's genuine, tracked
+  completion gate — see Open Questions below — rather than assuming "pushed" means "runnable."
+
+---
+
 ## Open Questions / Things to Revisit
 
 - **Correction to Phase 0's "process fix" entry above** (its literal wording is left as the
@@ -2051,8 +2218,14 @@ cases, no duplication of each page's own already-existing coverage.
     YAML-parse only (the same live-cluster-access gap noted in every Phase 7 task — this dev
     machine can't reach the cluster's intentionally internal-only port 6443). Closing this for
     real requires an actual `apply` + a live `curl`/tool-call test against the deployed sidecar,
-    the same kind of empirical check Task 8 originally used to *find* this gap — deferred to
-    Phase 8, not assumed done.
+    the same kind of empirical check Task 8 originally used to *find* this gap.
+  - **Phase 8 built the mechanism that will finally perform this live check, but has not run it
+    yet.** `deploy-dev.yml`/`deploy-prod.yml` (Tasks 37/38) are the first place in this project
+    where a real `kubectl apply` reaches the live cluster from a self-hosted runner — until that
+    runner is registered and the `github-token` Secret exists in `dev`/`prod` (see the two new
+    Open Questions entries below), neither workflow can run at all, so this remains exactly as
+    unverified as it was at the end of Phase 7. Not re-deferred to a future phase — it's now
+    blocked on the manual infrastructure preconditions below, not on any more code.
 
 - **RESOLVED: `@types/react`/`@types/react-dom` added, user-approved, see the Phase 5 entry
   above for full detail.** Was: `frontend/package.json` had no `@types/react`/`@types/react-dom`
@@ -2071,3 +2244,40 @@ cases, no duplication of each page's own already-existing coverage.
   `frontend/src/setupTests.ts` (imports the already-installed `@testing-library/jest-dom/vitest`
   subpath — no new dependency) and wiring it into `vitest.config.ts`'s `test.setupFiles`. Full
   detail in the Task 25 entry above.
+
+- **OPEN, explicit Phase 8 completion precondition, not vague backlog: `deploy-dev.yml` cannot
+  reach a Running pod in `dev` (and `deploy-prod.yml` cannot in `prod`) until someone manually
+  creates two Secrets per namespace.** Neither workflow will even get past `ContainerCreating` for
+  the affected pods without these — this isn't a nice-to-have follow-up, it's the literal
+  difference between "the workflow file exists" and "the workflow runs."
+  1. **`github-token`** (`mcp-test-analysis`, `mcp-github`, and the `auth-proxy` sidecar all
+     reference it by name) — known since Phase 7's health check
+     (`kubernetes/base/mcp-test-analysis/secret.yaml.example`'s own comment already documents the
+     copy-and-fill-in workflow); still not created anywhere as of Phase 8's end.
+  2. **`worker-secrets`** (`anthropic-api-key` key, referenced by `kubernetes/base/worker/
+     deployment.yaml`) — **newly found during Phase 8, not previously flagged anywhere in this
+     log.** Confirmed via a repo-wide search that, unlike `github-token`, there is no
+     `.example` file for this one at all — whoever creates it has to know the exact key name from
+     reading the Deployment manifest directly, with no template to copy.
+  Both need to exist in `dev` and separately in `prod` (Secrets are namespace-scoped). Documented
+  in `.github/workflows/README.md` alongside the runner-registration step below, so the
+  instructions live next to the workflows that need them, not only in this log.
+
+- **OPEN, explicit Phase 8 completion precondition, not vague backlog: neither deploy workflow can
+  run at all yet — the self-hosted runner and `production` Environment don't exist.**
+  1. **Self-hosted runner**, label `testscope-k8s`, registered on the control-plane EC2 node
+     (repo Settings → Actions → Runners → New self-hosted runner; run the provided
+     `config.sh`/`run.sh` as a systemd service). Both `deploy-dev.yml` and `deploy-prod.yml`'s
+     `deploy` jobs specify `runs-on: [self-hosted, testscope-k8s]` — `actionlint` already confirms
+     this label doesn't exist yet (its only finding on either workflow). While registering it,
+     also add the `/etc/hosts` entry from Task 31 (`worker_private_ip dev.testscope.local
+     testscope.local`) on that same host — both smoke tests curl those hostnames from the
+     control-plane and can't resolve them otherwise.
+  2. **`production` GitHub Environment** with at least one required reviewer (repo Settings →
+     Environments → New environment) — `deploy-prod.yml`'s `deploy` job specifies
+     `environment: production`; without it, either the job has nothing to gate on or (depending
+     on repo settings) fails outright referencing an undefined environment.
+  Until both exist, `git push`ing to `main` or tagging a `v*.*.*` release will trigger
+  `build-and-push` successfully (GitHub-hosted runner, no dependency on any of this) but the
+  `deploy` job will simply never start — not fail loudly, just never pick up a runner. Worth
+  knowing before assuming a quiet deploy run means success.

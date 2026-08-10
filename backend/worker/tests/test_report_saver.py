@@ -1,6 +1,9 @@
-import pytest
 from unittest.mock import AsyncMock, patch
+
+import pytest
+
 from app.nodes.report_saver import report_saver
+
 
 @pytest.mark.asyncio
 async def test_marks_completed_on_successful_save():

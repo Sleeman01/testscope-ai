@@ -1,7 +1,9 @@
 import boto3
 import pytest
 from moto import mock_aws
+
 from sqs import JobQueue
+
 
 @pytest.fixture
 def queue(monkeypatch):

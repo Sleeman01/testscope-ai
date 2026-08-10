@@ -1,12 +1,14 @@
 import asyncio
 import logging
-from datetime import datetime, timezone
+from datetime import UTC, datetime
+
 from config import get_settings
 from dynamodb import AnalysisStore
 from models import AnalysisRecord
-from app.nodes.job_intake import job_intake
+
 from app.graph import build_graph
 from app.mcp_clients import call_test_mcp_tool
+from app.nodes.job_intake import job_intake
 
 logger = logging.getLogger(__name__)
 
@@ -31,19 +33,22 @@ async def run_analysis(analysis_id: str, repository: str, issue_number: int, not
         return
     try:
         state = await asyncio.wait_for(_graph.ainvoke(state), timeout=600)
-    except asyncio.TimeoutError:
+    except TimeoutError:
         state["status"] = "failed"
         state["error_message"] = "analysis timed out"
     except Exception as exc:
+        logger.exception("Graph execution failed for analysis_id=%s", analysis_id)
         state["status"] = "failed"
         state["error_message"] = str(exc)
     finally:
         try:
             await call_test_mcp_tool("cleanup_workspace", analysis_id=analysis_id)
         except Exception:
-            pass
+            # Best-effort cleanup only — a failed workspace cleanup shouldn't fail the
+            # whole finally block or block the final upsert below, just get logged.
+            logger.warning("cleanup_workspace failed for analysis_id=%s (non-fatal)", analysis_id, exc_info=True)
         try:
-            now = datetime.now(timezone.utc).isoformat()
+            now = datetime.now(UTC).isoformat()
             store.upsert(AnalysisRecord(
                 analysis_id=analysis_id, repository=repository, issue_number=issue_number,
                 status=state.get("status", "failed"), created_at=now, updated_at=now,

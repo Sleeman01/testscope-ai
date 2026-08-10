@@ -1,8 +1,10 @@
 import threading
-from fastapi import FastAPI, HTTPException
+
 import uvicorn
 from config import get_settings
+from fastapi import FastAPI, HTTPException
 from sqs import JobQueue
+
 
 def start_health_server(port: int = 8080) -> threading.Thread:
     app = FastAPI()

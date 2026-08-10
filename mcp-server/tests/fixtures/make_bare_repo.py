@@ -1,6 +1,7 @@
 import subprocess
 from pathlib import Path
 
+
 def make_bare_repo(tmp_path: Path) -> str:
     """Creates a local bare git repo with one test file, returns its file:// clone URL."""
     work = tmp_path / "work"

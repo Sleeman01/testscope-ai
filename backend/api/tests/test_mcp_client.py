@@ -1,7 +1,10 @@
-import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
+
+import pytest
 from config import get_settings
+
 from app.mcp_client import call_github_tool
+
 
 def _fake_result(text: str):
     result = MagicMock()

@@ -1,5 +1,6 @@
 import pytest
 
+
 @pytest.mark.parametrize("password", ["wrong", ""])
 def test_login_rejects_invalid_password(client, password):
     """Login must reject invalid passwords with 401."""

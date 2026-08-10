@@ -1,5 +1,7 @@
 import json
+
 import boto3
+
 
 class ReportStore:
     def __init__(self, bucket: str):

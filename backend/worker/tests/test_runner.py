@@ -1,10 +1,13 @@
+from unittest.mock import AsyncMock, patch
+
 import boto3
 import pytest
-from moto import mock_aws
-from unittest.mock import AsyncMock, patch
 from config import get_settings
-from app.runner import run_analysis
 from dynamodb import AnalysisStore
+from moto import mock_aws
+
+from app.runner import run_analysis
+
 
 @pytest.fixture
 def store_env(monkeypatch):

@@ -1,5 +1,7 @@
 from fastapi import FastAPI
-from app.routes import health, analyses
+
+from app.routes import analyses, health
+
 
 def create_app() -> FastAPI:
     app = FastAPI(title="TestScope AI API")

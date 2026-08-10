@@ -1,5 +1,7 @@
 from unittest.mock import AsyncMock, MagicMock, patch
+
 import pytest
+
 from github_client import GithubClient
 
 
@@ -51,7 +53,9 @@ async def test_get_repo_size_bytes_raises_when_no_match(monkeypatch):
     transport_cm = AsyncMock()
     transport_cm.__aenter__.return_value = (AsyncMock(), AsyncMock())
 
-    with patch("github_client.streamable_http_client", return_value=transport_cm), \
-         patch("github_client.ClientSession", return_value=session_cm):
-        with pytest.raises(ValueError, match="no match"):
-            await client.get_repo_size_bytes("acme", "does-not-exist")
+    with (
+        patch("github_client.streamable_http_client", return_value=transport_cm),
+        patch("github_client.ClientSession", return_value=session_cm),
+        pytest.raises(ValueError, match="no match"),
+    ):
+        await client.get_repo_size_bytes("acme", "does-not-exist")

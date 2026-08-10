@@ -1,6 +1,9 @@
-import pytest
 from unittest.mock import AsyncMock, patch
-from app.nodes.coverage_analyzer import coverage_analyzer, CoverageEntry
+
+import pytest
+
+from app.nodes.coverage_analyzer import CoverageEntry, coverage_analyzer
+
 
 @pytest.mark.asyncio
 async def test_classifies_each_criterion():

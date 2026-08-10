@@ -1,6 +1,7 @@
 import os
 from pathlib import Path
-from workspace import WorkspaceManager, WorkspaceError
+
+from workspace import WorkspaceError, WorkspaceManager
 
 MAX_REPO_BYTES = 500 * 1024 * 1024
 MAX_FILES = 30

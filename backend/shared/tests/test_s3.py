@@ -1,8 +1,11 @@
 import json
+
 import boto3
 import pytest
 from moto import mock_aws
+
 from s3 import ReportStore
+
 
 @pytest.fixture
 def store(monkeypatch):

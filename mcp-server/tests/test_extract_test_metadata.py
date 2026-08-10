@@ -1,4 +1,5 @@
 from pathlib import Path
+
 from tools.extract_test_metadata import extract_test_metadata
 
 FIXTURE = Path(__file__).parent / "fixtures" / "sample_test_file.py"

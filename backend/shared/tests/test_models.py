@@ -1,5 +1,6 @@
 import json
 from pathlib import Path
+
 from models import AnalysisRecord
 
 FIXTURE = Path(__file__).parent / "fixtures" / "sample_analysis_record.json"

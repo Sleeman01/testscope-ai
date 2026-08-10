@@ -1,6 +1,13 @@
-import pytest
 from unittest.mock import AsyncMock, patch
-from app.nodes.requirement_parser import requirement_parser, Requirement, AcceptanceCriterion
+
+import pytest
+
+from app.nodes.requirement_parser import (
+    AcceptanceCriterion,
+    Requirement,
+    requirement_parser,
+)
+
 
 @pytest.mark.asyncio
 async def test_extracts_structured_requirement():

@@ -1,10 +1,12 @@
 import uuid
-from datetime import datetime, timezone
-from fastapi import APIRouter, status
+from datetime import UTC, datetime
+
 from config import get_settings
 from dynamodb import AnalysisStore
-from sqs import JobQueue
+from fastapi import APIRouter, status
 from models import AnalysisRecord
+from sqs import JobQueue
+
 from app.schemas import CreateAnalysisRequest, CreateAnalysisResponse
 
 router = APIRouter(prefix="/api/analyses")
@@ -18,7 +20,7 @@ def _queue() -> JobQueue:
 @router.post("", status_code=status.HTTP_202_ACCEPTED, response_model=CreateAnalysisResponse)
 def create_analysis(payload: CreateAnalysisRequest):
     analysis_id = str(uuid.uuid4())
-    now = datetime.now(timezone.utc).isoformat()
+    now = datetime.now(UTC).isoformat()
     _store().upsert(AnalysisRecord(
         analysis_id=analysis_id, repository=payload.repository, issue_number=payload.issue_number,
         status="pending", created_at=now, updated_at=now,
@@ -27,7 +29,9 @@ def create_analysis(payload: CreateAnalysisRequest):
     return CreateAnalysisResponse(analysis_id=analysis_id, status="pending")
 
 from fastapi import HTTPException
-from app.schemas import AnalysisStatusResponse, AnalysisListResponse
+
+from app.schemas import AnalysisListResponse, AnalysisStatusResponse
+
 
 def _to_status_response(record) -> AnalysisStatusResponse:
     return AnalysisStatusResponse(**record.model_dump(exclude={"tool_call_trace", "user_feedback"}))
@@ -49,7 +53,9 @@ def list_analyses(repository: str | None = None, issue_number: int | None = None
     return AnalysisListResponse(analyses=[_to_status_response(r) for r in records], next_cursor=next_cursor)
 
 from s3 import ReportStore
+
 from app.schemas import ReportResponse
+
 
 def _report_store() -> ReportStore:
     return ReportStore(bucket=get_settings().s3_bucket)
@@ -71,6 +77,7 @@ def get_report(analysis_id: str):
 
 from app.mcp_client import call_github_tool
 from app.schemas import GithubIssueResponse
+
 
 @router.post("/{analysis_id}/github-issue", response_model=GithubIssueResponse)
 async def create_github_issue(analysis_id: str):

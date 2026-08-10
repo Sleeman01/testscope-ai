@@ -1,8 +1,10 @@
 from unittest.mock import AsyncMock
-from pathlib import Path
+
 import pytest
-from tools.find_test_files import find_test_files
+
 from tests.fixtures.make_bare_repo import make_bare_repo
+from tools.find_test_files import find_test_files
+
 
 @pytest.mark.asyncio
 async def test_finds_files_matching_keywords(tmp_path, monkeypatch):

@@ -1,5 +1,7 @@
 import pytest
+
 from retry import with_retry
+
 
 @pytest.mark.asyncio
 async def test_succeeds_after_transient_failures():

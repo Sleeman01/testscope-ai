@@ -1,4 +1,9 @@
+import logging
+
 from app.mcp_clients import call_test_mcp_tool
+
+logger = logging.getLogger(__name__)
+
 
 async def test_file_retriever(state: dict) -> dict:
     try:
@@ -8,6 +13,7 @@ async def test_file_retriever(state: dict) -> dict:
         )
         state["candidate_files"] = result["files"]
     except Exception as exc:
+        logger.exception("find_test_files failed for analysis_id=%s", state["analysis_id"])
         state["candidate_files"] = []
         state.setdefault("warnings", []).append(f"find_test_files failed; continuing with no candidate files: {exc}")
     return state

@@ -1,6 +1,8 @@
-import pytest
 from unittest.mock import AsyncMock, patch
-from app.nodes.test_search_planner import test_search_planner, SearchKeywords
+
+import pytest
+
+from app.nodes.test_search_planner import SearchKeywords, test_search_planner
 
 # The imported node function's name matches pytest's test_* discovery glob — without
 # this, pytest tries to collect and run it directly as a test case too (it takes a

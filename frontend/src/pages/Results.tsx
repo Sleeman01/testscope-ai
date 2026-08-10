@@ -3,6 +3,13 @@ import { useParams } from "react-router-dom";
 import { getAnalysis, getReport, createGithubIssue } from "../api/client";
 import type { AnalysisStatus, Report } from "../api/types";
 
+// report's fields are loosely typed as Record<string, unknown> in ../api/types (the
+// backend's coverage_matrix/missing_tests/tool_call_trace are open-ended JSON, not a
+// fixed schema) — these narrow just the fields this page actually renders.
+type CoverageRow = { criterion_id: string; status: string; explanation: string };
+type MissingTestRow = { behavior: string };
+type ToolCallRow = { node: string; tool: string; duration_ms: number };
+
 export function Results() {
   const { id } = useParams<{ id: string }>();
   const [status, setStatus] = useState<AnalysisStatus | null>(null);
@@ -45,7 +52,7 @@ export function Results() {
       <h2>Coverage Matrix</h2>
       <table>
         <tbody>
-          {report.coverage_matrix.map((row: any) => (
+          {(report.coverage_matrix as CoverageRow[]).map((row) => (
             <tr key={row.criterion_id}>
               <td>{row.criterion_id}</td>
               <td>{row.status}</td>
@@ -56,10 +63,10 @@ export function Results() {
       </table>
 
       <h2>Missing Scenarios</h2>
-      <ul>{report.missing_tests.map((m: any, i: number) => <li key={i}>{m.behavior}</li>)}</ul>
+      <ul>{(report.missing_tests as MissingTestRow[]).map((m, i) => <li key={i}>{m.behavior}</li>)}</ul>
 
       <h2>Tool Call History</h2>
-      <ul>{report.tool_call_trace.map((t: any, i: number) => <li key={i}>{t.node} → {t.tool} ({t.duration_ms}ms)</li>)}</ul>
+      <ul>{(report.tool_call_trace as ToolCallRow[]).map((t, i) => <li key={i}>{t.node} → {t.tool} ({t.duration_ms}ms)</li>)}</ul>
 
       <button onClick={handleCreateIssue} disabled={!!status.github_issue_url || !!issueUrl}>
         Create GitHub issue

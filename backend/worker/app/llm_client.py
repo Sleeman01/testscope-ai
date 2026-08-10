@@ -1,7 +1,9 @@
 from anthropic import AsyncAnthropic
-from pydantic import BaseModel
 from config import get_settings
+from pydantic import BaseModel
+
 from retry import with_retry
+
 
 async def call_llm(system_prompt: str, user_prompt: str, response_model: type[BaseModel], tool_name: str) -> BaseModel:
     settings = get_settings()

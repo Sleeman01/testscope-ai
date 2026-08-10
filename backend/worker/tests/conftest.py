@@ -3,7 +3,9 @@ import subprocess
 import sys
 import time
 from pathlib import Path
+
 import pytest
+
 
 @pytest.fixture(scope="session", autouse=True)
 def mcp_test_analysis_server():

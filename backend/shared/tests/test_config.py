@@ -1,5 +1,6 @@
 from config import get_settings
 
+
 def test_get_settings_reads_required_fields_from_env(monkeypatch):
     monkeypatch.setenv("DYNAMODB_TABLE", "testscope-analyses-test")
     monkeypatch.setenv("S3_BUCKET", "testscope-reports-test")

@@ -1,6 +1,8 @@
-import pytest
 from unittest.mock import AsyncMock, patch
-from app.nodes.test_plan_generator import test_plan_generator, TestCase, TestPlan
+
+import pytest
+
+from app.nodes.test_plan_generator import TestCase, TestPlan, test_plan_generator
 
 # The imported node function's name matches pytest's test_* discovery glob — without
 # this, pytest tries to collect and run it directly as a test case too (see Task 13's

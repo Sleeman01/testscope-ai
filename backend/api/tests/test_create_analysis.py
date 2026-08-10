@@ -1,7 +1,8 @@
 import boto3
 import pytest
-from moto import mock_aws
 from fastapi.testclient import TestClient
+from moto import mock_aws
+
 
 @pytest.fixture
 def client(monkeypatch):

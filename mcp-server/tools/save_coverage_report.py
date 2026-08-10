@@ -1,7 +1,9 @@
 import json
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from decimal import Decimal
-from aws import get_dynamodb_table, get_s3_client, get_s3_bucket_name
+
+from aws import get_dynamodb_table, get_s3_bucket_name, get_s3_client
+
 
 def _render_markdown(repository, issue_number, requirement, coverage_matrix, missing_tests, test_plan) -> str:
     lines = [f"# Coverage Report — {repository}#{issue_number}", "", f"## {requirement.get('feature_name', 'Untitled')}", ""]
@@ -16,7 +18,7 @@ def _render_markdown(repository, issue_number, requirement, coverage_matrix, mis
 
 def save_coverage_report(analysis_id, repository, issue_number, requirement, coverage_matrix,
                           missing_tests, test_plan, status, tool_call_trace) -> dict:
-    now = datetime.now(timezone.utc).isoformat()
+    now = datetime.now(UTC).isoformat()
     s3_key = f"{repository}/{issue_number}/{analysis_id}"
     payload = {
         "analysis_id": analysis_id, "repository": repository, "issue_number": issue_number,
