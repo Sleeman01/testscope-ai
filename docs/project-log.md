@@ -23,16 +23,21 @@ Update this after each phase (or whenever something worth remembering happens).
 (`backend/shared`, Task 9, complete, merged to `main`) → 3 (`backend/worker`, Tasks 10–17,
 complete, merged to `main` via PR #12) → 4 (`backend/api`, Tasks 18–22, complete, merged to
 `main` via PR #13) → 5 (`frontend`, Tasks 23–26, complete, merged to `main` via PR #14) → 6
-(`terraform`, Tasks 27–31) — **Task 27 complete. Task 28 (`ec2` module) `apply` ran for real
-(after fixing one plan bug and two account-guardrail-driven deviations, both user-approved:
-`t3.medium` not `t3.large`, 30GB not 40GB volumes) and created 2 real EC2 instances — but an
+(`terraform`, Tasks 27–31) — **Task 27 complete. Task 28 (`ec2` module) code complete/committed
+(one plan bug + two account-guardrail-driven deviations fixed, both user-approved: `t3.medium`
+not `t3.large`, 30GB not 40GB volumes). `apply` ran for real and created 2 EC2 instances, but an
 account-level automated Lambda (`aws-learning-budget-keeper-function`, runs daily at 13:00/21:00
-UTC) stopped both ~10 minutes after launch, before kubeadm could converge. Both instances are
-currently `stopped` (not terminated, not destroyed) — cluster-convergence verification could not
-be completed. **Task 28 is blocked pending the user's decision on how to proceed** — see the
-Phase 6 Task 28 entry below for full detail. Both tasks on `feature/phase-6-terraform`, not yet
-pushed/merged. Pre-work re-verified the GitHub-auth follow-up empirically (env var alone is
-insufficient; see the Open Questions entry) before starting Task 27.**
+UTC — this AWS account is a shared multi-tenant classroom/learning account) stopped both ~10
+minutes after launch, before kubeadm could converge — cluster-convergence verification could not
+be completed. Instances were confirmed unrecoverable (cloud-init won't re-run on a same-instance
+stop/start) and torn down: `terraform plan -destroy` shown and confirmed first, then `terraform
+destroy` — `Resources: 15 destroyed`. Verified via live AWS checks (not just `terraform state
+list`) that nothing billing-relevant remains. **Task 28's actual cluster has not yet been
+successfully stood up** — needs a re-`apply` timed outside the 13:00/21:00 UTC windows, at the
+user's direction. See the Phase 6 Task 28 entry below for full detail. Both tasks on
+`feature/phase-6-terraform`, not yet pushed/merged. Pre-work re-verified the GitHub-auth
+follow-up empirically (env var alone is insufficient; see the Open Questions entry) before
+starting Task 27.**
 **Branch pattern in use:** `feature/phase-<N>-<short-description>`, one PR per phase (docs-only
 housekeeping like this entry uses `docs/<short-description>` instead)
 **Current branch:** `feature/phase-6-terraform` (cut fresh from `main` after confirming PR #14
@@ -1333,7 +1338,7 @@ cases, no duplication of each page's own already-existing coverage.
   - No credential/secret handling — this task never touches the GitHub-auth question at all
     (that's Task 28+/Phase 7 territory); no AWS credentials were used since no `apply` ran.
 
-### Task 28 (`ec2` module — control-plane + worker via kubeadm) — code complete, `apply` ran, **cluster did NOT converge — instances auto-stopped by an account-level Lambda before kubeadm could finish; blocked pending user decision**
+### Task 28 (`ec2` module — control-plane + worker via kubeadm) — code complete, `apply` ran, **cluster did NOT converge (account-level Lambda auto-stopped both instances before kubeadm finished); torn down clean via `terraform destroy`, re-apply pending user direction on timing**
 
 - Created `terraform/modules/ec2/{main,variables,outputs}.tf` +
   `cloud-init-{control-plane,worker}.yaml.tpl`; wired `module "ec2"` into
@@ -1440,9 +1445,38 @@ cases, no duplication of each page's own already-existing coverage.
   cost (~$4.80/month combined) until the instances are destroyed. Full instance-hour billing
   would resume immediately if/when the instances are restarted or replaced.
 - Code committed on `feature/phase-6-terraform` — module/wiring fixes (`t3.medium`, `30GB`)
-  included. **This is now blocked pending the user's decision on how to proceed** (retry at a
-  time clear of the 13:00/21:00 UTC windows, investigate the budget-keeper Lambda's exclusion
-  options, or something else) — no further `apply`/`destroy` will run without that direction.
+  included.
+- **User confirmed the instances were unrecoverable (cloud-init won't re-run on a stop/start of
+  the same instance-id) and directed a full teardown.** Ran `terraform plan -destroy` first and
+  showed the exact 15-resource list before doing anything else — matched the 15 resources this
+  same `apply` had created, `0 to add, 0 to change, 15 to destroy`, nothing partial or
+  unexpected. User confirmed; ran `terraform destroy -auto-approve` with the same `admin_cidr`.
+  **`Destroy complete! Resources: 15 destroyed.`**
+- **Verified nothing billing-relevant remains — via `terraform state list` (empty) and, more
+  importantly, direct live AWS checks (not just trusting Terraform's own bookkeeping), each
+  scoped to this project's own tagged/named resources rather than a broad account-wide scan**
+  (this AWS account turned out to be a shared multi-tenant classroom/learning account with many
+  other users' resources visible on an unfiltered `describe-instances` — noted for awareness,
+  not investigated further, and nothing from it is recorded here beyond that fact):
+  - Both EC2 instances (`i-06bab93b4c588e5c3`, `i-0819b40cfaece6ae4`): `terminated`.
+  - EBS volumes tagged `testscope-*`: none (`[]`) — the two 30GB root volumes went with their
+    instances via `delete_on_termination` (the plan's default, never overridden).
+  - VPC tagged `testscope-vpc`, security group named `testscope-k8s-cluster`: none (`[]`).
+  - Key pair `testscope-k8s-keypair`: `InvalidKeyPair.NotFound` (confirms deleted).
+  - IAM role `testscope-k8s-worker-role` / instance profile `testscope-k8s-worker-profile`:
+    `NoSuchEntity` (confirms deleted).
+  - Local `testscope-k8s-keypair.pem`: no longer on disk (destroyed by
+    `local_sensitive_file`'s own destroy).
+  - **No billing-relevant resources remain from this apply.** The only real-money exposure this
+    session was the ~10 minutes both `t3.medium` instances were actually running before the
+    budget-keeper Lambda stopped them, plus a few hours of two 30GB EBS volumes existing before
+    this destroy — both trivial.
+- **Status: Task 28's code (module + fixes) is committed and validated, but the actual cluster
+  has been torn down, unconverged, and not yet successfully re-attempted.** Re-running `apply`
+  needs to land outside the 13:00/21:00 UTC budget-keeper windows to have any chance of kubeadm
+  finishing before getting stopped again — this is a standing constraint of this AWS account, not
+  something fixed by anything in this task. Left for the user to decide timing/next steps; no
+  further `apply` will run without explicit direction.
 
 ---
 
