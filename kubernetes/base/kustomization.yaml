@@ -1,0 +1,15 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - api/deployment.yaml
+  - api/service.yaml
+  - worker/deployment.yaml
+  - configmap.yaml
+  - mcp-test-analysis/deployment.yaml
+  - mcp-test-analysis/service.yaml
+  - mcp-github/deployment.yaml
+  - mcp-github/service.yaml
+  - mcp-github/auth-proxy-configmap.yaml
+  - frontend/deployment.yaml
+  - frontend/service.yaml
+  - ingress.yaml

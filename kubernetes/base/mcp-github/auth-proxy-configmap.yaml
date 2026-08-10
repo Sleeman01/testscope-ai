@@ -1,0 +1,21 @@
+# nginx's official image auto-renders *.template files under /etc/nginx/templates into
+# /etc/nginx/conf.d/ (stripping ".template") via envsubst at container start, substituting
+# any ${VAR}/$VAR token against the container's own environment — no custom entrypoint or
+# init container needed to get GITHUB_TOKEN from the mounted Secret into the rendered config.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: mcp-github-auth-proxy-config
+data:
+  default.conf.template: |
+    server {
+        listen 8100;
+        location / {
+            proxy_pass http://127.0.0.1:8101;
+            proxy_set_header Authorization "Bearer ${GITHUB_TOKEN}";
+            proxy_set_header Host $host;
+            proxy_http_version 1.1;
+            proxy_set_header Connection "";
+            proxy_buffering off;
+        }
+    }

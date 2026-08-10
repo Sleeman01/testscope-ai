@@ -1,0 +1,31 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mcp-test-analysis
+spec:
+  replicas: 1
+  selector: { matchLabels: { app: mcp-test-analysis } }
+  template:
+    metadata: { labels: { app: mcp-test-analysis } }
+    spec:
+      containers:
+        - name: mcp-test-analysis
+          image: ghcr.io/testscope-ai/mcp-test-analysis:latest
+          ports: [{ containerPort: 8100 }, { containerPort: 8101 }]
+          env:
+            - name: WORKSPACE_ROOT
+              value: /workspace
+            - name: MCP_GITHUB_URL
+              value: http://mcp-github:8100/mcp
+            - name: GITHUB_TOKEN
+              valueFrom: { secretKeyRef: { name: github-token, key: token } }
+          envFrom: [{ configMapRef: { name: testscope-config } }]
+          resources:
+            requests: { cpu: 200m, memory: 256Mi }
+            limits: { cpu: 500m, memory: 512Mi }
+          volumeMounts: [{ name: workspace, mountPath: /workspace }]
+          livenessProbe: { httpGet: { path: /health/live, port: 8101 }, initialDelaySeconds: 5, periodSeconds: 10 }
+          readinessProbe: { httpGet: { path: /health/ready, port: 8101 }, initialDelaySeconds: 5, periodSeconds: 10 }
+      volumes:
+        - name: workspace
+          emptyDir: { sizeLimit: 2Gi }

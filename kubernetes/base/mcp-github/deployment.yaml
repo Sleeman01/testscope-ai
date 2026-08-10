@@ -1,0 +1,49 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mcp-github
+spec:
+  replicas: 1
+  selector: { matchLabels: { app: mcp-github } }
+  template:
+    metadata: { labels: { app: mcp-github } }
+    spec:
+      containers:
+        - name: mcp-github
+          image: ghcr.io/github/github-mcp-server:latest
+          # Runs the official image's `http` subcommand, bound to localhost only. The bare
+          # entrypoint (no args) starts an stdio server that exits immediately when run
+          # detached (confirmed empirically, Task 8 / design.md §5.2) — this container needs
+          # the same `http --port ... --listen-host ...` invocation Task 8 already established,
+          # which the plan's own Task 33 snippet omitted. Bound to 127.0.0.1 (not 0.0.0.0)
+          # because this container is no longer the pod's externally-reachable one — see
+          # auth-proxy below, which is what the mcp-github Service actually targets.
+          args: ["http", "--port", "8101", "--listen-host", "127.0.0.1"]
+          env:
+            - name: GITHUB_PERSONAL_ACCESS_TOKEN
+              valueFrom: { secretKeyRef: { name: github-token, key: token } }
+          resources:
+            requests: { cpu: 200m, memory: 256Mi }
+            limits: { cpu: 500m, memory: 512Mi }
+        - name: auth-proxy
+          # Closes the GitHub-auth gap (design.md §5.2; project-log's "KNOWN FOLLOW-UP TASK"):
+          # github-mcp-server's http mode requires a per-request `Authorization: Bearer <token>`
+          # header and does not accept GITHUB_PERSONAL_ACCESS_TOKEN as a substitute for it.
+          # This sidecar is the only container the pod exposes externally (the mcp-github
+          # Service's port 8100 lands here); it injects the header from the same github-token
+          # Secret before proxying to the real server on localhost:8101. Callers (worker,
+          # mcp-test-analysis) are unaffected — still call http://mcp-github:8100/mcp with no
+          # token of their own, preserving design.md §10's "GitHub token ... neither reaches
+          # api or frontend" boundary.
+          image: nginx:1.27-alpine
+          ports: [{ containerPort: 8100 }]
+          env:
+            - name: GITHUB_TOKEN
+              valueFrom: { secretKeyRef: { name: github-token, key: token } }
+          volumeMounts: [{ name: auth-proxy-config, mountPath: /etc/nginx/templates }]
+          resources:
+            requests: { cpu: 50m, memory: 32Mi }
+            limits: { cpu: 100m, memory: 64Mi }
+      volumes:
+        - name: auth-proxy-config
+          configMap: { name: mcp-github-auth-proxy-config }
