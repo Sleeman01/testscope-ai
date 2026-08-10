@@ -1,0 +1,53 @@
+apiVersion: v1
+kind: ConfigMap
+metadata: { name: promtail-config, namespace: monitoring }
+data:
+  # Task 40, real bug found and fixed: plan.md's own promtail.yaml snippet passes
+  # -config.file=/etc/promtail/config.yml as a container arg but never defines that file
+  # anywhere (no ConfigMap, no volumeMount at /etc/promtail) — promtail's -config.file flag
+  # is mandatory, so the container as originally specified would fail to start at all.
+  # Confirmed structurally from the YAML itself (no live cluster needed): no resource in
+  # the plan's snippet ever provides that path. Minimal config here scrapes the same
+  # /var/log/pods hostPath already mounted below (standard per-pod-per-container log
+  # layout under kubeadm/containerd) and pushes to the same Loki URL already passed via
+  # -client.url (kept for parity with the plan's literal args, though this config's own
+  # clients: entry is what promtail actually uses).
+  config.yml: |
+    server:
+      http_listen_port: 9080
+      grpc_listen_port: 0
+
+    positions:
+      filename: /tmp/positions.yaml
+
+    clients:
+      - url: http://loki:3100/loki/api/v1/push
+
+    scrape_configs:
+      - job_name: kubernetes-pods
+        static_configs:
+          - targets: [localhost]
+            labels:
+              job: varlogs
+              __path__: /var/log/pods/*/*/*.log
+---
+apiVersion: apps/v1
+kind: DaemonSet
+metadata: { name: promtail, namespace: monitoring }
+spec:
+  selector: { matchLabels: { app: promtail } }
+  template:
+    metadata: { labels: { app: promtail } }
+    spec:
+      containers:
+        - name: promtail
+          image: grafana/promtail:3.2.0
+          args: ["-config.file=/etc/promtail/config.yml", "-client.url=http://loki:3100/loki/api/v1/push"]
+          volumeMounts:
+            - { name: varlog, mountPath: /var/log/pods, readOnly: true }
+            - { name: config, mountPath: /etc/promtail }
+      volumes:
+        - name: varlog
+          hostPath: { path: /var/log/pods }
+        - name: config
+          configMap: { name: promtail-config }

@@ -6,7 +6,11 @@ spec:
   replicas: 1
   selector: { matchLabels: { app: worker } }
   template:
-    metadata: { labels: { app: worker } }
+    metadata:
+      labels: { app: worker }
+      # Task 40: see api/deployment.yaml's identical comment — redundant with the default
+      # first-port behavior here (worker only declares 8080), added for consistency.
+      annotations: { prometheus.io/scrape: "true", prometheus.io/port: "8080" }
     spec:
       containers:
         - name: worker
