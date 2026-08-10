@@ -1,0 +1,12 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: testscope-config
+data:
+  ENV: "base"  # overridden per-namespace in Task 35
+  LOG_LEVEL: "INFO"
+  DYNAMODB_TABLE: "REPLACED_BY_OVERLAY"
+  S3_BUCKET: "REPLACED_BY_OVERLAY"
+  SQS_QUEUE_URL: "REPLACED_BY_OVERLAY"
+  MCP_GITHUB_URL: "http://mcp-github:8100/mcp"
+  MCP_TEST_ANALYSIS_URL: "http://mcp-test-analysis:8100/mcp"
