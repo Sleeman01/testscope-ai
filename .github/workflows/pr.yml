@@ -57,7 +57,7 @@ jobs:
         # reach a sibling directory (see Task 17's Dockerfile header comment).
         run: docker build -t testscope-${{ matrix.image }}:${{ github.sha }} -f ${{ matrix.service }}/Dockerfile .
       - name: Scan with Trivy (CRITICAL — blocking)
-        uses: aquasecurity/trivy-action@0.24.0
+        uses: aquasecurity/trivy-action@57a97c7e7821a5776cebc9bb87c984fa69cba8f1 # v0.35.0
         # ignore-unfixed: confirmed via `trivy image --format json` before adding this (not
         # assumed) that the base-image CRITICAL findings this project can't act on directly —
         # the 4 perl-base/libperl5.40 CVEs in python:3.11-slim (CVE-2026-13221, -42496,
@@ -72,7 +72,7 @@ jobs:
           exit-code: "1"
           ignore-unfixed: true
       - name: Scan with Trivy (HIGH — non-blocking)
-        uses: aquasecurity/trivy-action@0.24.0
+        uses: aquasecurity/trivy-action@57a97c7e7821a5776cebc9bb87c984fa69cba8f1 # v0.35.0
         # Severity split, not a full non-block: base-image OS CVEs (python:3.11-slim /
         # nginx:1.27-alpine / node build-stage) are not this project's own code, and several
         # have no upstream fix yet (Trivy reports them fix_deferred/affected) — HIGH findings
