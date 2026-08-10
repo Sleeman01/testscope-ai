@@ -23,21 +23,23 @@ Update this after each phase (or whenever something worth remembering happens).
 (`backend/shared`, Task 9, complete, merged to `main`) → 3 (`backend/worker`, Tasks 10–17,
 complete, merged to `main` via PR #12) → 4 (`backend/api`, Tasks 18–22, complete, merged to
 `main` via PR #13) → 5 (`frontend`, Tasks 23–26, complete, merged to `main` via PR #14) → 6
-(`terraform`, Tasks 27–31) — **Task 27 complete. Task 28 (`ec2` module) code complete/committed
-(one plan bug + two account-guardrail-driven deviations fixed, both user-approved: `t3.medium`
-not `t3.large`, 30GB not 40GB volumes). `apply` ran for real and created 2 EC2 instances, but an
-account-level automated Lambda (`aws-learning-budget-keeper-function`, runs daily at 13:00/21:00
-UTC — this AWS account is a shared multi-tenant classroom/learning account) stopped both ~10
-minutes after launch, before kubeadm could converge — cluster-convergence verification could not
-be completed. Instances were confirmed unrecoverable (cloud-init won't re-run on a same-instance
-stop/start) and torn down: `terraform plan -destroy` shown and confirmed first, then `terraform
-destroy` — `Resources: 15 destroyed`. Verified via live AWS checks (not just `terraform state
-list`) that nothing billing-relevant remains. **Task 28's actual cluster has not yet been
-successfully stood up** — needs a re-`apply` timed outside the 13:00/21:00 UTC windows, at the
-user's direction. See the Phase 6 Task 28 entry below for full detail. Both tasks on
-`feature/phase-6-terraform`, not yet pushed/merged. Pre-work re-verified the GitHub-auth
-follow-up empirically (env var alone is insufficient; see the Open Questions entry) before
-starting Task 27.**
+(`terraform`, Tasks 27–31) — **Task 27 complete. Task 28 (`ec2` module) ✅ complete — cluster
+verified converged for real.** First `apply` attempt hit an account guardrail Lambda
+(`aws-learning-budget-keeper-function`, daily 13:00/21:00 UTC stops — this AWS account is a
+shared multi-tenant classroom/learning account) that stopped both instances before kubeadm could
+finish; destroyed cleanly (`terraform plan -destroy` shown first, then `Resources: 15
+destroyed`, verified via live AWS checks). Retried timed for ~7h margin — that attempt then
+uncovered a real plan bug (`cloud-init` never set the standard kubeadm networking prerequisites,
+`net.ipv4.ip_forward=1`/`br_netfilter`, so `kubeadm init` failed at preflight and both instances
+spun forever in `until`-loops that could never exit); fixed in both cloud-init templates,
+destroyed the broken instances, re-applied. **Third apply attempt fully converged in ~3.5
+minutes** — both nodes `Ready`, Calico/ingress-nginx (`hostNetwork` confirmed via matching
+`hostIP`/`podIP`)/metrics-server (`kubectl top nodes` functional) all verified, plus an external
+`curl` to the worker's public IP. Cluster is **currently live and billing**, will auto-stop at
+13:00 UTC (16:00 Jerusalem) if left running. See the Phase 6 Task 28 entry below for full detail.
+Both tasks on `feature/phase-6-terraform`, not yet pushed/merged. Pre-work re-verified the
+GitHub-auth follow-up empirically (env var alone is insufficient; see the Open Questions entry)
+before starting Task 27.**
 **Branch pattern in use:** `feature/phase-<N>-<short-description>`, one PR per phase (docs-only
 housekeeping like this entry uses `docs/<short-description>` instead)
 **Current branch:** `feature/phase-6-terraform` (cut fresh from `main` after confirming PR #14
@@ -1338,7 +1340,7 @@ cases, no duplication of each page's own already-existing coverage.
   - No credential/secret handling — this task never touches the GitHub-auth question at all
     (that's Task 28+/Phase 7 territory); no AWS credentials were used since no `apply` ran.
 
-### Task 28 (`ec2` module — control-plane + worker via kubeadm) — code complete, `apply` ran, **cluster did NOT converge (account-level Lambda auto-stopped both instances before kubeadm finished); torn down clean via `terraform destroy`, re-apply pending user direction on timing**
+### Task 28 (`ec2` module — control-plane + worker via kubeadm) — ✅ **complete, cluster verified converged for real (third apply attempt)**
 
 - Created `terraform/modules/ec2/{main,variables,outputs}.tf` +
   `cloud-init-{control-plane,worker}.yaml.tpl`; wired `module "ec2"` into
@@ -1471,12 +1473,78 @@ cases, no duplication of each page's own already-existing coverage.
     session was the ~10 minutes both `t3.medium` instances were actually running before the
     budget-keeper Lambda stopped them, plus a few hours of two 30GB EBS volumes existing before
     this destroy — both trivial.
-- **Status: Task 28's code (module + fixes) is committed and validated, but the actual cluster
-  has been torn down, unconverged, and not yet successfully re-attempted.** Re-running `apply`
-  needs to land outside the 13:00/21:00 UTC budget-keeper windows to have any chance of kubeadm
-  finishing before getting stopped again — this is a standing constraint of this AWS account, not
-  something fixed by anything in this task. Left for the user to decide timing/next steps; no
-  further `apply` will run without explicit direction.
+- **Retry, timed by the user for ~7 hours of margin before the next 13:00 UTC (16:00 Jerusalem)
+  budget-keeper window: `terraform apply -var="admin_cidr=176.229.150.57/32"` (plan already
+  reviewed in the prior attempt, auto-approve used per the user's explicit instruction).**
+  Succeeded cleanly, 15/15 resources, no guardrail/API errors (both fixes from the prior attempt
+  held). New instances: `control_plane` `i-071f33fcd461aa949` (`13.220.54.97`), `worker`
+  `i-00f5f584bf5de5a46` (`3.95.219.158`). **Actively monitored, not just polled once** — SSH in
+  repeatedly to check `cloud-init status` and tail `/var/log/cloud-init-output.log` on both
+  instances rather than assuming success.
+- **A second real, confirmed bug found this way — cloud-init was not actually stuck, it was
+  looping forever on a bug that had already failed:** after ~20 minutes both instances still
+  showed `cloud-init status: running`, which is unusual on its own — checked the actual log
+  content (not just the status field) rather than continuing to wait, and found `kubeadm init`
+  had failed at the very first preflight check:
+  `[ERROR FileContent--proc-sys-net-ipv4-ip_forward]: /proc/sys/net/ipv4/ip_forward contents are
+  not set to 1`. **Root cause: plan.md's `cloud-init-control-plane.yaml.tpl`/
+  `cloud-init-worker.yaml.tpl` never set the standard, always-required kubeadm networking
+  prerequisites** (`br_netfilter`/`overlay` kernel modules, `net.ipv4.ip_forward=1`,
+  `net.bridge.bridge-nf-call-iptables=1`) before calling `kubeadm init`/`kubeadm join` — a plain
+  omission from the plan's own script, not an environment quirk. Because `kubeadm init` never
+  produced `/etc/kubernetes/admin.conf`, every subsequent `kubectl` call in the script failed,
+  including the one inside `until kubectl ... get deployment ingress-nginx-controller ...; do
+  sleep 5; done` — that loop could **never** exit on its own (kubectl would never succeed), which
+  is why `cloud-init status` stayed `running` indefinitely rather than erroring out cleanly. The
+  worker was independently stuck in its own `until nc -z ... 6443; do sleep 10; done` loop for
+  the same underlying reason (API server never started). Neither instance would have converged
+  no matter how long they were left running.
+  - **Fixed in both templates** (control-plane and worker both run `kubeadm init`/`kubeadm join`
+    and both hit the identical preflight check) by adding the standard, official kubeadm
+    prerequisite sequence right after the `containerd` restart and before the Kubernetes apt
+    repo setup: load `overlay`/`br_netfilter` kernel modules, write
+    `net.bridge.bridge-nf-call-iptables`/`net.bridge.bridge-nf-call-ip6tables`/`net.ipv4.ip_forward`
+    to `/etc/sysctl.d/k8s.conf`, `sysctl --system`. User confirmed destroy-fix-reapply rather than
+    continuing to inspect the stuck instances.
+  - Destroyed the broken instances first (`terraform destroy -auto-approve`, ran in the
+    background past the 120s foreground limit — confirmed complete via a direct
+    `aws ec2 describe-instances` check rather than waiting on buffered output, then
+    `Destroy complete! Resources: 15 destroyed.` once the buffered log flushed), applied the
+    cloud-init fix, `terraform validate` clean, re-applied.
+- **Third apply attempt: succeeded, and the cluster converged for real this time — verified, not
+  assumed.** New resources: `control_plane` `i-0887a982c0501958c` (`107.23.155.19`), `worker`
+  `i-0606ccf79b1c0c1af` (`3.80.37.183`). Monitored the same way (repeated `cloud-init status` +
+  log tail checks, not a single poll):
+  - `apply` invoked 06:37:10 UTC → completed 06:38:23 UTC.
+  - Control-plane `cloud-init status: done` at 06:39:06 UTC.
+  - Worker `cloud-init status: done` at 06:39:22 UTC (`kubeadm join` succeeded — log showed the
+    standard "Run 'kubectl get nodes' on the control-plane to see this node join the cluster").
+  - All pods across all namespaces reached `Running`/`Completed` by 06:40:44 UTC (polled every
+    20s, checked via `kubectl get pods -A` for anything not in those two states).
+  - **Total wall-clock from `apply` invocation to fully-converged cluster: ~3.5 minutes** — far
+    faster than the ~7-hour safe margin before the next budget-keeper window; gives a real,
+    observed number for planning future applies/retries instead of guessing.
+  - **Verified against the plan's exact Step 5 success criteria, not just "pods are Running":**
+    `kubectl get nodes` — both `Ready` (`ip-10-0-1-35` control-plane, `ip-10-0-1-176` worker).
+    `kubectl get pods -n ingress-nginx` — controller `1/1 Running`; confirmed `hostNetwork: true`
+    genuinely took effect (not just set in the spec) via
+    `kubectl get pod ... -o jsonpath='{.status.hostIP} {.status.podIP}'` — both equal
+    `10.0.1.176`, the worker's own node IP, exactly the plan's stated proof criterion.
+    `kubectl get pods -n kube-system -l k8s-app=metrics-server` — `1/1 Running`; functionally
+    confirmed (not just pod-status) via `kubectl top nodes`, which returned real CPU/memory
+    numbers for both nodes. Calico (`calico-node` ×2, `calico-kube-controllers` ×1, all in
+    `kube-system` — this Calico manifest version doesn't use a separate `calico-system`
+    namespace, unlike some others) — all `Running`.
+  - **Extra, beyond-the-plan verification:** `curl http://<worker_public_ip>/` from this machine
+    directly (not via SSH, a genuine external request) — `HTTP 404`, ingress-nginx's own default
+    backend response (expected and correct, since no application `Ingress` resource exists yet)
+    — proves the controller is really listening on the worker's public IP via `hostNetwork`,
+    reachable from the real internet, not just internally reachable within the VPC.
+- **Status: Task 28 is genuinely complete** — module code committed, real cluster stood up and
+  independently verified converged against every one of the plan's Step 5 criteria plus one
+  extra external check. Cluster is currently live and **billing** — both `t3.medium` instances
+  running, will be auto-stopped by the account's budget-keeper Lambda at 13:00 UTC (16:00
+  Jerusalem) if still running at that time.
 
 ---
 

@@ -4,6 +4,11 @@ runcmd:
   - mkdir -p /etc/containerd && containerd config default | tee /etc/containerd/config.toml
   - sed -i 's/SystemdCgroup = false/SystemdCgroup = true/' /etc/containerd/config.toml
   - systemctl restart containerd
+  - modprobe overlay
+  - modprobe br_netfilter
+  - echo -e "overlay\nbr_netfilter" | tee /etc/modules-load.d/k8s.conf
+  - echo -e "net.bridge.bridge-nf-call-iptables = 1\nnet.bridge.bridge-nf-call-ip6tables = 1\nnet.ipv4.ip_forward = 1" | tee /etc/sysctl.d/k8s.conf
+  - sysctl --system
   - mkdir -p /etc/apt/keyrings
   - curl -fsSL https://pkgs.k8s.io/core:/stable:/v1.30/deb/Release.key | gpg --dearmor -o /etc/apt/keyrings/kubernetes-apt-keyring.gpg
   - echo 'deb [signed-by=/etc/apt/keyrings/kubernetes-apt-keyring.gpg] https://pkgs.k8s.io/core:/stable:/v1.30/deb/ /' | tee /etc/apt/sources.list.d/kubernetes.list
