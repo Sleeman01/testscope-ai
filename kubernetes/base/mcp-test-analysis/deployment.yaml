@@ -6,7 +6,15 @@ spec:
   replicas: 1
   selector: { matchLabels: { app: mcp-test-analysis } }
   template:
-    metadata: { labels: { app: mcp-test-analysis } }
+    metadata:
+      labels: { app: mcp-test-analysis }
+      # Task 40, real bug found and fixed (not in plan.md's own Task 40 scrape-config
+      # snippet, which relies on Prometheus's default first-declared-containerPort
+      # behavior): this pod declares TWO ports (8100 MCP transport, 8101 health/metrics),
+      # and Prometheus's kubernetes_sd_configs (role: pod) would otherwise scrape podIP:8100
+      # by default — the streamable-HTTP MCP transport, not the FastAPI app Task 39 mounted
+      # /metrics on. Explicit port override so the correct one (8101) gets scraped.
+      annotations: { prometheus.io/scrape: "true", prometheus.io/port: "8101" }
     spec:
       containers:
         - name: mcp-test-analysis

@@ -1,0 +1,53 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata: { name: prometheus, namespace: monitoring }
+spec:
+  replicas: 1
+  selector: { matchLabels: { app: prometheus } }
+  template:
+    metadata: { labels: { app: prometheus } }
+    spec:
+      serviceAccountName: prometheus
+      containers:
+        - name: prometheus
+          image: prom/prometheus:v2.55.0
+          args: ["--config.file=/etc/prometheus/prometheus.yml"]
+          ports: [{ containerPort: 9090 }]
+          volumeMounts: [{ name: config, mountPath: /etc/prometheus }]
+      volumes:
+        - name: config
+          configMap: { name: prometheus-config }
+---
+apiVersion: v1
+kind: ConfigMap
+metadata: { name: prometheus-config, namespace: monitoring }
+data:
+  prometheus.yml: |
+    scrape_configs:
+      - job_name: testscope
+        kubernetes_sd_configs: [{ role: pod }]
+        relabel_configs:
+          - source_labels: [__meta_kubernetes_pod_label_app]
+            regex: api|worker|mcp-test-analysis|mcp-github
+            action: keep
+          # Prometheus's default __address__ (pod IP + first declared containerPort) is
+          # wrong for any pod with more than one port where /metrics isn't on the first one
+          # — confirmed true for mcp-test-analysis (8100 MCP transport, 8101 health/metrics).
+          # kubernetes/base/{api,worker,mcp-test-analysis}/deployment.yaml each set a
+          # prometheus.io/port pod-template annotation (Task 40); this honors it when
+          # present and falls back to the default first-port address otherwise. mcp-github
+          # has no such annotation (it's the official third-party image and has no /metrics
+          # endpoint at all, on any port — a pre-existing, already-flagged gap, not
+          # something this scrape config can fix) so it keeps falling back, same as before.
+          - source_labels: [__meta_kubernetes_pod_ip, __meta_kubernetes_pod_annotation_prometheus_io_port]
+            regex: (.+);(.+)
+            action: replace
+            replacement: $1:$2
+            target_label: __address__
+---
+apiVersion: v1
+kind: Service
+metadata: { name: prometheus, namespace: monitoring }
+spec:
+  selector: { app: prometheus }
+  ports: [{ port: 9090, targetPort: 9090 }]

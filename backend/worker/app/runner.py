@@ -1,9 +1,11 @@
 import asyncio
 import logging
+import time
 from datetime import UTC, datetime
 
 from config import get_settings
 from dynamodb import AnalysisStore
+from metrics import ANALYSIS_COUNT, ANALYSIS_DURATION
 from models import AnalysisRecord
 
 from app.graph import build_graph
@@ -31,6 +33,7 @@ async def run_analysis(analysis_id: str, repository: str, issue_number: int, not
         # the whole worker process on a single bad job instead of just skipping it).
         logger.exception("job_intake failed for analysis_id=%s; skipping job", analysis_id)
         return
+    start_time = time.time()
     try:
         state = await asyncio.wait_for(_graph.ainvoke(state), timeout=600)
     except TimeoutError:
@@ -41,6 +44,15 @@ async def run_analysis(analysis_id: str, repository: str, issue_number: int, not
         state["status"] = "failed"
         state["error_message"] = str(exc)
     finally:
+        ANALYSIS_DURATION.observe(time.time() - start_time)
+        # Single, correctly-labeled increment for every terminal outcome that reaches this
+        # point (happy-path "completed" via report_saver, or "failed" from an early node's
+        # conditional-edge termination, a graph exception, or a timeout) — same
+        # state.get("status", "failed") read the AnalysisRecord below uses, so the metric
+        # and the persisted record can never disagree. Moved here from report_saver.py
+        # (Task 39 follow-up fix) since report_saver only ever runs on the
+        # already-succeeded path and unconditionally sets "completed" itself.
+        ANALYSIS_COUNT.labels(status=state.get("status", "failed")).inc()
         try:
             await call_test_mcp_tool("cleanup_workspace", analysis_id=analysis_id)
         except Exception:

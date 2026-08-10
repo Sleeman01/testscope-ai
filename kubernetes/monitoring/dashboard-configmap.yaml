@@ -1,0 +1,72 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: testscope-dashboard
+  namespace: monitoring
+  # No `grafana_dashboard: "1"` label: that's the kube-prometheus-stack sidecar-discovery
+  # convention, and Task 40's Grafana Deployment doesn't run that sidecar. This ConfigMap
+  # is mounted directly at /etc/grafana/dashboards/testscope.json instead (Task 40's
+  # grafana-dashboard-provider ConfigMap tells Grafana to load JSON files from there).
+data:
+  # Task 41, panel-by-panel cross-check against the metrics actually declared/incremented
+  # in backend/shared/metrics.py and mcp-server/mcp_metrics.py (not assumed from
+  # design.md/plan.md text alone):
+  #
+  # - API Request Rate: testscope_api_requests_total{method,path,status} (API_REQUEST_COUNT,
+  #   backend/shared/metrics.py) -- incremented on every request via backend/api/app/main.py's
+  #   middleware (Task 39). `by (status)` is valid: status is a declared label. OK.
+  # - Analysis Success/Fail Rate: testscope_analyses_total{status} (ANALYSIS_COUNT) --
+  #   incremented once per terminal outcome in backend/worker/app/runner.py's finally block
+  #   (moved there from report_saver.py in commit 967acc5, specifically so this label can
+  #   show both "completed" and "failed" -- before that fix, report_saver unconditionally
+  #   set status="completed" and this panel could never show a failure). OK.
+  # - Analysis Duration (p50/p95): testscope_analysis_duration_seconds_bucket
+  #   (ANALYSIS_DURATION, an unlabeled Histogram) -- Prometheus's Histogram always emits the
+  #   `le` bucket label regardless of any custom labelnames, so `by (le)` is valid even
+  #   though ANALYSIS_DURATION itself declares no labels. Observed in runner.py's finally
+  #   block. OK.
+  # - MCP Tool Latency by Tool: testscope_mcp_tool_duration_seconds_bucket{tool}
+  #   (MCP_TOOL_LATENCY) -- same name+label declared independently in both
+  #   backend/shared/metrics.py (worker's app/mcp_clients.py._call) and
+  #   mcp-server/mcp_metrics.py (server.py's @instrument_tool-wrapped tools); Prometheus
+  #   differentiates the two processes by scrape-target labels, not metric name, so both
+  #   contribute to the same query. `by (le, tool)` valid. OK.
+  # - MCP Tool Errors by Tool: testscope_mcp_tool_calls_total{tool,status="error"}
+  #   (MCP_TOOL_CALL_COUNT) -- both worker's _call and mcp-server's instrument_tool set the
+  #   literal string status="error" on exception (and "success" otherwise) -- confirmed
+  #   exact string match against both instrumentation sites, not assumed. OK.
+  # - Pod Restarts: kube_pod_container_status_restarts_total{namespace} -- NOT covered by
+  #   this cross-check, because it isn't one of ours: this is a kube-state-metrics metric,
+  #   and kube-state-metrics is not deployed anywhere in this project (not in Task 40's
+  #   manifests, not listed in design.md §12's stack -- "Prometheus + Grafana + Loki/
+  #   Promtail" -- and Task 40's own scrape config only discovers pods whose `app` label
+  #   matches api|worker|mcp-test-analysis|mcp-github, which a kube-state-metrics pod
+  #   wouldn't anyway). This panel will read "No data" until/unless kube-state-metrics is
+  #   deployed as its own, separately-scoped addition -- flagged, not fixed here, same as
+  #   the already-flagged mcp-github probe/scrape gaps.
+  # - Recent Failed Analyses (logs): LogQL `|= "status=failed"` against Loki -- NOT
+  #   confirmed to match anything: grepped every logger.exception/logger.warning call across
+  #   backend/ and mcp-server/ and none of them emit structured output or the literal
+  #   substring "status=failed" (design.md §12 calls for "structured JSON" logs with a
+  #   "final status" field, but no task through Task 40 has ever implemented a JSON log
+  #   formatter -- confirmed via a repo-wide grep, not assumed). Kept as the plan's literal
+  #   query text rather than silently substituted with something that happens to match
+  #   today's plain-string log output (e.g. a bare `|= "failed"`) -- that's a logging-format
+  #   decision, not a dashboard-authoring one, and belongs to whoever adds structured
+  #   logging, not to this task. This panel will also read "No data" until that exists.
+  testscope.json: |
+    {
+      "title": "TestScope AI — System Health",
+      "panels": [
+        { "title": "API Request Rate", "type": "timeseries", "targets": [{ "expr": "sum(rate(testscope_api_requests_total[5m])) by (status)" }] },
+        { "title": "Analysis Success/Fail Rate", "type": "timeseries", "targets": [{ "expr": "sum(rate(testscope_analyses_total[15m])) by (status)" }] },
+        { "title": "Analysis Duration (p50/p95)", "type": "timeseries", "targets": [
+          { "expr": "histogram_quantile(0.50, sum(rate(testscope_analysis_duration_seconds_bucket[15m])) by (le))" },
+          { "expr": "histogram_quantile(0.95, sum(rate(testscope_analysis_duration_seconds_bucket[15m])) by (le))" }
+        ]},
+        { "title": "MCP Tool Latency by Tool", "type": "timeseries", "targets": [{ "expr": "histogram_quantile(0.95, sum(rate(testscope_mcp_tool_duration_seconds_bucket[15m])) by (le, tool))" }] },
+        { "title": "MCP Tool Errors by Tool", "type": "timeseries", "targets": [{ "expr": "sum(rate(testscope_mcp_tool_calls_total{status=\"error\"}[15m])) by (tool)" }] },
+        { "title": "Pod Restarts", "type": "timeseries", "targets": [{ "expr": "sum(kube_pod_container_status_restarts_total{namespace=~\"dev|prod\"}) by (pod)" }] },
+        { "title": "Recent Failed Analyses (logs)", "type": "logs", "datasource": "Loki", "targets": [{ "expr": "{namespace=~\"dev|prod\"} |= \"status=failed\"" }] }
+      ]
+    }

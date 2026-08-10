@@ -7,8 +7,10 @@ from pathlib import Path
 import uvicorn
 from fastapi import FastAPI
 from mcp.server import MCPServer
+from prometheus_client import make_asgi_app
 
 from github_client import GithubClient
+from mcp_metrics import instrument_tool
 from sweeper import start_sweeper
 from tools.cleanup_workspace import cleanup_workspace as _cleanup_workspace
 from tools.extract_test_metadata import extract_test_metadata as _extract_test_metadata
@@ -22,21 +24,25 @@ _github_client = GithubClient()
 WORKSPACE_ROOT = Path(os.environ.get("WORKSPACE_ROOT", "/workspace"))
 
 @mcp.tool()
+@instrument_tool("find_test_files")
 async def find_test_files(analysis_id: str, repository: str, ref: str, keywords: list[str]) -> dict:
     owner, repo = repository.split("/", 1)
     clone_url = f"https://x-access-token:{os.environ['GITHUB_TOKEN']}@github.com/{repository}.git"
     return await _find_test_files(analysis_id, clone_url, ref, keywords, _github_client, owner, repo)
 
 @mcp.tool()
+@instrument_tool("read_test_file")
 def read_test_file(analysis_id: str, path: str) -> dict:
     return _read_test_file(analysis_id, path, root=WORKSPACE_ROOT)
 
 @mcp.tool()
+@instrument_tool("extract_test_metadata")
 def extract_test_metadata(analysis_id: str, path: str) -> dict:
     content = _read_test_file(analysis_id, path, root=WORKSPACE_ROOT)["content"]
     return _extract_test_metadata(content)
 
 @mcp.tool()
+@instrument_tool("save_coverage_report")
 def save_coverage_report(analysis_id: str, repository: str, issue_number: int, requirement: dict,
                           coverage_matrix: list, missing_tests: list, test_plan: list, status: str,
                           tool_call_trace: list) -> dict:
@@ -44,10 +50,12 @@ def save_coverage_report(analysis_id: str, repository: str, issue_number: int, r
                                   missing_tests, test_plan, status, tool_call_trace)
 
 @mcp.tool()
+@instrument_tool("get_previous_analysis")
 def get_previous_analysis(repository: str, issue_number: int) -> dict:
     return _get_previous_analysis(repository, issue_number)
 
 @mcp.tool()
+@instrument_tool("cleanup_workspace")
 def cleanup_workspace(analysis_id: str) -> dict:
     return _cleanup_workspace(analysis_id, root=WORKSPACE_ROOT)
 
@@ -55,6 +63,7 @@ def build_health_app() -> FastAPI:
     app = FastAPI()
     app.get("/health/live")(lambda: {"status": "ok"})
     app.get("/health/ready")(lambda: {"status": "ok"})
+    app.mount("/metrics", make_asgi_app())
     return app
 
 def _wait_until_listening(port: int, timeout_seconds: float = 30.0) -> None:

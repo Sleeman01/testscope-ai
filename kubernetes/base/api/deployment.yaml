@@ -6,7 +6,14 @@ spec:
   replicas: 1
   selector: { matchLabels: { app: api } }
   template:
-    metadata: { labels: { app: api } }
+    metadata:
+      labels: { app: api }
+      # Task 40: Prometheus's kubernetes_sd_configs (role: pod) defaults __address__ to the
+      # pod's *first* declared containerPort when no override is given. api only declares
+      # one port (8000, same as this annotation), so this is redundant here for api/worker
+      # specifically — added for consistency with mcp-test-analysis, where the same default
+      # would be wrong (see that Deployment's own comment).
+      annotations: { prometheus.io/scrape: "true", prometheus.io/port: "8000" }
     spec:
       containers:
         - name: api
