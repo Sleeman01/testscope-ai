@@ -1,5 +1,7 @@
 import asyncio
-from typing import Any, Callable
+from collections.abc import Callable
+from typing import Any
+
 
 def _always_retryable(exc: Exception) -> bool:
     return True

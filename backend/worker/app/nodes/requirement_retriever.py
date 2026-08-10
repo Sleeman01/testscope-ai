@@ -4,9 +4,14 @@
 # receive (same os.environ["GITHUB_TOKEN"] convention as mcp-server/github_client.py).
 # Comments have a working MCP substitute (issue_read/get_comments) and still route
 # through call_github_tool for its retry/classification behavior.
+import logging
 import os
+
 import httpx2
+
 from app.mcp_clients import call_github_tool
+
+logger = logging.getLogger(__name__)
 
 GITHUB_API_BASE = "https://api.github.com"
 
@@ -23,6 +28,7 @@ async def requirement_retriever(state: dict) -> dict:
     try:
         state["issue_body"] = await _fetch_issue_body(owner, repo, state["issue_number"])
     except Exception as exc:
+        logger.exception("Could not fetch issue body for %s#%s", state["repository"], state["issue_number"])
         state["status"] = "failed"
         state["error_message"] = f"Could not fetch issue body: {exc}"
         return state
@@ -33,6 +39,7 @@ async def requirement_retriever(state: dict) -> dict:
         )
         state["issue_comments"] = [c.get("body", "") for c in comments.get("comments", [])]
     except Exception:
+        logger.exception("Could not fetch issue comments for %s#%s", state["repository"], state["issue_number"])
         state["issue_comments"] = []
         state.setdefault("warnings", []).append("Could not fetch issue comments; analyzing issue body only.")
     return state

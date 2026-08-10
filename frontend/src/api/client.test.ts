@@ -7,10 +7,10 @@ beforeEach(() => {
 
 describe("createAnalysis", () => {
   it("POSTs to /api/analyses and returns the parsed body", async () => {
-    (fetch as any).mockResolvedValue({
+    vi.mocked(fetch).mockResolvedValue({
       ok: true,
       json: async () => ({ analysis_id: "a1", status: "pending" }),
-    });
+    } as Response);
     const result = await createAnalysis("acme/widgets", 42);
     expect(fetch).toHaveBeenCalledWith(
       "/api/analyses",
@@ -22,7 +22,7 @@ describe("createAnalysis", () => {
 
 describe("getAnalysis", () => {
   it("GETs /api/analyses/{id}", async () => {
-    (fetch as any).mockResolvedValue({ ok: true, json: async () => ({ analysis_id: "a1", status: "completed" }) });
+    vi.mocked(fetch).mockResolvedValue({ ok: true, json: async () => ({ analysis_id: "a1", status: "completed" }) } as Response);
     const result = await getAnalysis("a1");
     expect(fetch).toHaveBeenCalledWith("/api/analyses/a1", expect.anything());
     expect(result.status).toBe("completed");

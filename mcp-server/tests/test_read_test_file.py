@@ -1,5 +1,5 @@
-from pathlib import Path
 from tools.read_test_file import read_test_file
+
 
 def test_reads_full_small_file(tmp_path):
     root = tmp_path / "workspace_root"

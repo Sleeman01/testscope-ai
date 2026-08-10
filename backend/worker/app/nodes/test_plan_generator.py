@@ -1,5 +1,7 @@
 from typing import Literal
+
 from pydantic import BaseModel, RootModel
+
 from app.llm_client import call_llm
 
 TEST_TYPES = Literal["positive", "negative", "validation", "boundary-value", "permission",

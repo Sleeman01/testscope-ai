@@ -1,5 +1,7 @@
 from boto3.dynamodb.conditions import Key
+
 from aws import get_dynamodb_table
+
 
 def get_previous_analysis(repository: str, issue_number: int) -> dict:
     table = get_dynamodb_table()

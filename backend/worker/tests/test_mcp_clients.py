@@ -1,7 +1,13 @@
-import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
+
+import pytest
 from config import get_settings
-from app.mcp_clients import call_github_tool, call_test_mcp_tool, _is_retryable_tool_error
+
+from app.mcp_clients import (
+    _is_retryable_tool_error,
+    call_github_tool,
+    call_test_mcp_tool,
+)
 
 
 def _fake_result(text: str):
@@ -41,10 +47,12 @@ async def test_does_not_retry_not_found_error():
     calls = {"count": 0}
     async def fake_call_once(base_url, tool_name, kwargs):
         calls["count"] += 1
-        raise Exception("404 Not Found")
-    with patch("app.mcp_clients._call_once", new=AsyncMock(side_effect=fake_call_once)):
-        with pytest.raises(Exception, match="404"):
-            await call_github_tool("get_repository", owner="acme", repo="does-not-exist")
+        raise RuntimeError("404 Not Found")
+    with (
+        patch("app.mcp_clients._call_once", new=AsyncMock(side_effect=fake_call_once)),
+        pytest.raises(RuntimeError, match="404"),
+    ):
+        await call_github_tool("get_repository", owner="acme", repo="does-not-exist")
     assert calls["count"] == 1
 
 def test_classifier_treats_terminal_markers_as_non_retryable():

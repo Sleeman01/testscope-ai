@@ -1,9 +1,12 @@
 import asyncio
 import time
+
 from config import get_settings
 from sqs import JobQueue
+
 from app.health import start_health_server
 from app.runner import run_analysis
+
 
 def poll_forever() -> None:
     settings = get_settings()

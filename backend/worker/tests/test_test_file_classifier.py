@@ -1,5 +1,7 @@
-import pytest
 from unittest.mock import AsyncMock, patch
+
+import pytest
+
 from app.nodes.test_file_classifier import test_file_classifier
 
 # See test_test_search_planner.py's comment: the imported node function's name matches

@@ -1,6 +1,9 @@
-import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
-from app.nodes.requirement_retriever import requirement_retriever, _fetch_issue_body
+
+import pytest
+
+from app.nodes.requirement_retriever import _fetch_issue_body, requirement_retriever
+
 
 @pytest.mark.asyncio
 async def test_retrieves_issue_body_and_comments():

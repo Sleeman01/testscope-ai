@@ -3,6 +3,7 @@ import subprocess
 import time
 from pathlib import Path
 
+
 class WorkspaceError(Exception):
     def __init__(self, code: str, message: str):
         self.code = code

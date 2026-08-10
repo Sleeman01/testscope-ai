@@ -1,5 +1,7 @@
 import json
+
 import boto3
+
 
 class JobQueue:
     def __init__(self, queue_url: str):

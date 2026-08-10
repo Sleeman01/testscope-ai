@@ -1,5 +1,7 @@
 import os
+
 import boto3
+
 
 def get_dynamodb_table():
     return boto3.resource("dynamodb").Table(get_table_name())

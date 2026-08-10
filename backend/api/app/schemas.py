@@ -1,5 +1,6 @@
 from pydantic import BaseModel
 
+
 class CreateAnalysisRequest(BaseModel):
     repository: str
     issue_number: int

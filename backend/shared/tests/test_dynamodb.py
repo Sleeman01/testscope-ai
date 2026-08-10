@@ -1,8 +1,10 @@
 import boto3
 import pytest
 from moto import mock_aws
-from models import AnalysisRecord
+
 from dynamodb import AnalysisStore
+from models import AnalysisRecord
+
 
 @pytest.fixture
 def store(monkeypatch):

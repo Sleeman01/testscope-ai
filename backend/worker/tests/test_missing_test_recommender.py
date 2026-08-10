@@ -1,6 +1,13 @@
-import pytest
 from unittest.mock import AsyncMock, patch
-from app.nodes.missing_test_recommender import missing_test_recommender, MissingTest, MissingTests
+
+import pytest
+
+from app.nodes.missing_test_recommender import (
+    MissingTest,
+    MissingTests,
+    missing_test_recommender,
+)
+
 
 @pytest.mark.asyncio
 async def test_recommends_missing_scenarios_for_gaps():

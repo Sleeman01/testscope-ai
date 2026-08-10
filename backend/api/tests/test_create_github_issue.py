@@ -1,9 +1,11 @@
-import boto3
 import json
-import pytest
-from moto import mock_aws
 from unittest.mock import AsyncMock, patch
+
+import boto3
+import pytest
 from fastapi.testclient import TestClient
+from moto import mock_aws
+
 
 @pytest.fixture
 def client(monkeypatch):

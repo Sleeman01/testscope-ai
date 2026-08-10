@@ -1,0 +1,50 @@
+name: Deploy Dev
+on:
+  push:
+    branches: [main]
+
+jobs:
+  build-and-push:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - service: backend/api
+            image: api
+          - service: backend/worker
+            image: worker
+          - service: mcp-server
+            image: mcp-test-analysis
+          - service: frontend
+            image: frontend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/login-action@v3
+        with: { registry: ghcr.io, username: "${{ github.actor }}", password: "${{ secrets.GITHUB_TOKEN }}" }
+      - run: |
+          docker build -t ghcr.io/${{ github.repository_owner }}/testscope-${{ matrix.image }}:${{ github.sha }} -f ${{ matrix.service }}/Dockerfile .
+          docker push ghcr.io/${{ github.repository_owner }}/testscope-${{ matrix.image }}:${{ github.sha }}
+
+  deploy:
+    needs: [build-and-push]
+    runs-on: [self-hosted, testscope-k8s]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Update image tags and apply
+        shell: bash
+        # Fixed from plan.md's literal per-image loop: that version re-ran `kubectl kustomize .`
+        # fresh on every iteration and overwrote /tmp/rendered.yaml each time, so only the LAST
+        # image in the loop (frontend) ever ended up retagged in what actually got applied —
+        # confirmed empirically against the real kubernetes/dev kustomize output before writing
+        # this fix (api/worker/mcp-test-analysis stayed on the literal `:latest` placeholder).
+        # Fix: render once, then chain all four sed substitutions in a single pass.
+        run: |
+          cd kubernetes/dev
+          SED_ARGS=()
+          for img in api worker mcp-test-analysis frontend; do
+            SED_ARGS+=(-e "s#ghcr.io/testscope-ai/${img}:latest#ghcr.io/${{ github.repository_owner }}/testscope-${img}:${{ github.sha }}#g")
+          done
+          kubectl kustomize . | sed "${SED_ARGS[@]}" > /tmp/rendered.yaml
+          kubectl apply -f /tmp/rendered.yaml
+      - name: Smoke test
+        run: bash kubernetes/dev/smoke-test.sh dev dev.testscope.local

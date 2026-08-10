@@ -1,5 +1,7 @@
 from typing import Literal
+
 from pydantic import BaseModel
+
 
 class AnalysisRecord(BaseModel):
     analysis_id: str

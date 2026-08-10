@@ -1,0 +1,49 @@
+name: Deploy Prod
+on:
+  push:
+    tags: ["v*.*.*"]
+
+jobs:
+  build-and-push:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - service: backend/api
+            image: api
+          - service: backend/worker
+            image: worker
+          - service: mcp-server
+            image: mcp-test-analysis
+          - service: frontend
+            image: frontend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/login-action@v3
+        with: { registry: ghcr.io, username: "${{ github.actor }}", password: "${{ secrets.GITHUB_TOKEN }}" }
+      - run: |
+          docker build -t ghcr.io/${{ github.repository_owner }}/testscope-${{ matrix.image }}:${{ github.ref_name }} -f ${{ matrix.service }}/Dockerfile .
+          docker push ghcr.io/${{ github.repository_owner }}/testscope-${{ matrix.image }}:${{ github.ref_name }}
+
+  deploy:
+    needs: [build-and-push]
+    runs-on: [self-hosted, testscope-k8s]
+    environment: production  # requires a manual reviewer approval, configured once in repo Settings > Environments
+    steps:
+      - uses: actions/checkout@v4
+      - name: Update image tags and apply
+        shell: bash
+        # Same fix as deploy-dev.yml: chain all four sed substitutions over a single
+        # `kubectl kustomize .` render instead of re-rendering (and overwriting the previous
+        # image's substitution) on every loop iteration — see that workflow's comment for the
+        # empirical confirmation of the bug this replaces.
+        run: |
+          cd kubernetes/prod
+          SED_ARGS=()
+          for img in api worker mcp-test-analysis frontend; do
+            SED_ARGS+=(-e "s#ghcr.io/testscope-ai/${img}:latest#ghcr.io/${{ github.repository_owner }}/testscope-${img}:${{ github.ref_name }}#g")
+          done
+          kubectl kustomize . | sed "${SED_ARGS[@]}" > /tmp/rendered.yaml
+          kubectl apply -f /tmp/rendered.yaml
+      - name: Smoke test
+        run: bash kubernetes/prod/smoke-test.sh prod testscope.local

@@ -1,6 +1,9 @@
-import pytest
 from unittest.mock import AsyncMock, patch
+
+import pytest
+
 from app.nodes.request_validator import request_validator
+
 
 @pytest.mark.asyncio
 async def test_sets_default_branch_on_success():

@@ -1,5 +1,7 @@
 from pydantic import BaseModel
+
 from app.llm_client import call_llm
+
 
 class SearchKeywords(BaseModel):
     keywords: list[str]

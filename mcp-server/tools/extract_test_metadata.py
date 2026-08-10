@@ -1,5 +1,6 @@
 import ast
 
+
 def _decorator_name(node: ast.expr) -> str:
     if isinstance(node, ast.Call):
         node = node.func

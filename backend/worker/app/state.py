@@ -1,5 +1,6 @@
 from typing import TypedDict
 
+
 class AgentState(TypedDict):
     analysis_id: str
     repository: str

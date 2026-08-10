@@ -1,7 +1,9 @@
+
 import pytest
-from pathlib import Path
-from workspace import WorkspaceManager, WorkspaceError
+
 from tests.fixtures.make_bare_repo import make_bare_repo
+from workspace import WorkspaceError, WorkspaceManager
+
 
 def test_get_or_clone_creates_workspace_and_reuses_it(tmp_path):
     clone_url = make_bare_repo(tmp_path)

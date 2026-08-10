@@ -1,5 +1,6 @@
 from app.nodes.quality_validator import quality_validator
 
+
 def test_strips_fabricated_evidence_not_in_candidate_files():
     state = {
         "candidate_files": [{"path": "tests/test_login.py"}],
