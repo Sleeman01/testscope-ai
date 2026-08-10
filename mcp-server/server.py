@@ -1,5 +1,9 @@
 import os
+import threading
 from pathlib import Path
+
+import uvicorn
+from fastapi import FastAPI
 from mcp.server import MCPServer
 
 from tools.find_test_files import find_test_files as _find_test_files
@@ -45,8 +49,18 @@ def get_previous_analysis(repository: str, issue_number: int) -> dict:
 def cleanup_workspace(analysis_id: str) -> dict:
     return _cleanup_workspace(analysis_id, root=WORKSPACE_ROOT)
 
+def build_health_app() -> FastAPI:
+    app = FastAPI()
+    app.get("/health/live")(lambda: {"status": "ok"})
+    app.get("/health/ready")(lambda: {"status": "ok"})
+    return app
+
+def _start_health_server(port: int = 8101):
+    uvicorn.run(build_health_app(), host="0.0.0.0", port=port, log_level="warning")
+
 if __name__ == "__main__":
     start_sweeper(WORKSPACE_ROOT, interval_seconds=900, max_age_seconds=3600)
+    threading.Thread(target=_start_health_server, daemon=True).start()
     mcp.run(
         transport="streamable-http",
         host=os.environ.get("MCP_HOST", "0.0.0.0"),

@@ -5,3 +5,8 @@ resources:
   - api/service.yaml
   - worker/deployment.yaml
   - configmap.yaml
+  - mcp-test-analysis/deployment.yaml
+  - mcp-test-analysis/service.yaml
+  - mcp-github/deployment.yaml
+  - mcp-github/service.yaml
+  - mcp-github/auth-proxy-configmap.yaml
