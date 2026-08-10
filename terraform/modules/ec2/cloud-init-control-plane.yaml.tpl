@@ -1,0 +1,28 @@
+#cloud-config
+runcmd:
+  - apt-get update && apt-get install -y apt-transport-https ca-certificates curl gpg containerd
+  - mkdir -p /etc/containerd && containerd config default | tee /etc/containerd/config.toml
+  - sed -i 's/SystemdCgroup = false/SystemdCgroup = true/' /etc/containerd/config.toml
+  - systemctl restart containerd
+  - modprobe overlay
+  - modprobe br_netfilter
+  - echo -e "overlay\nbr_netfilter" | tee /etc/modules-load.d/k8s.conf
+  - echo -e "net.bridge.bridge-nf-call-iptables = 1\nnet.bridge.bridge-nf-call-ip6tables = 1\nnet.ipv4.ip_forward = 1" | tee /etc/sysctl.d/k8s.conf
+  - sysctl --system
+  - mkdir -p /etc/apt/keyrings
+  - curl -fsSL https://pkgs.k8s.io/core:/stable:/v1.30/deb/Release.key | gpg --dearmor -o /etc/apt/keyrings/kubernetes-apt-keyring.gpg
+  - echo 'deb [signed-by=/etc/apt/keyrings/kubernetes-apt-keyring.gpg] https://pkgs.k8s.io/core:/stable:/v1.30/deb/ /' | tee /etc/apt/sources.list.d/kubernetes.list
+  - apt-get update && apt-get install -y kubelet kubeadm kubectl && apt-mark hold kubelet kubeadm kubectl
+  - kubeadm init --token=${kubeadm_token} --token-ttl=0 --pod-network-cidr=192.168.0.0/16
+  - mkdir -p /home/ubuntu/.kube
+  - cp -i /etc/kubernetes/admin.conf /home/ubuntu/.kube/config
+  - chown ubuntu:ubuntu /home/ubuntu/.kube/config
+  - kubectl --kubeconfig=/etc/kubernetes/admin.conf apply -f https://raw.githubusercontent.com/projectcalico/calico/v3.28.0/manifests/calico.yaml
+  - kubectl --kubeconfig=/etc/kubernetes/admin.conf create namespace dev
+  - kubectl --kubeconfig=/etc/kubernetes/admin.conf create namespace prod
+  - kubectl --kubeconfig=/etc/kubernetes/admin.conf create namespace monitoring
+  - kubectl --kubeconfig=/etc/kubernetes/admin.conf apply -f https://raw.githubusercontent.com/kubernetes/ingress-nginx/controller-v1.11.0/deploy/static/provider/baremetal/deploy.yaml
+  - until kubectl --kubeconfig=/etc/kubernetes/admin.conf get deployment ingress-nginx-controller -n ingress-nginx >/dev/null 2>&1; do sleep 5; done
+  - kubectl --kubeconfig=/etc/kubernetes/admin.conf patch deployment ingress-nginx-controller -n ingress-nginx --type=json -p='[{"op":"add","path":"/spec/template/spec/hostNetwork","value":true},{"op":"replace","path":"/spec/template/spec/dnsPolicy","value":"ClusterFirstWithHostNet"}]'
+  - kubectl --kubeconfig=/etc/kubernetes/admin.conf apply -f https://github.com/kubernetes-sigs/metrics-server/releases/latest/download/components.yaml
+  - kubectl --kubeconfig=/etc/kubernetes/admin.conf patch deployment metrics-server -n kube-system --type=json -p='[{"op":"add","path":"/spec/template/spec/containers/0/args/-","value":"--kubelet-insecure-tls"}]'

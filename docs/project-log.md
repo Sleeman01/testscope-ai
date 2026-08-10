@@ -22,21 +22,33 @@ Update this after each phase (or whenever something worth remembering happens).
 **Phase:** 0 (complete, merged) → 1 (Tasks 2–8, complete, merged to `main`) → 2
 (`backend/shared`, Task 9, complete, merged to `main`) → 3 (`backend/worker`, Tasks 10–17,
 complete, merged to `main` via PR #12) → 4 (`backend/api`, Tasks 18–22, complete, merged to
-`main` via PR #13) → 5 (`frontend`, Tasks 23–26) — **all 4 tasks (23–26) complete on
-`feature/phase-5-frontend`, pushed to `origin`, not yet merged (user will open/merge the PR
-themselves). `frontend/index.html` (a plan gap — no task created it) added out-of-band per the
-user's decision; `npm run build` and the `frontend/Dockerfile` (built + run + curl-verified) are
-both fully green end-to-end. Phase 5 self-check run (see entry below) — decision: skip a
-dedicated health check (risk profile much smaller than Phase 3/4's), close the one flagged gap
-(no `<App />`-level routing integration test) as targeted insurance instead — done, see the
-"Decision" note at the end of the Phase 5 section.**
+`main` via PR #13) → 5 (`frontend`, Tasks 23–26, complete, merged to `main` via PR #14) → 6
+(`terraform`, Tasks 27–31) — **Phase 6 ✅ all 5 tasks complete.** Task 27 (`networking` +
+`shared` scaffolding) and Task 28 (`ec2` module) both real, applied, verified infrastructure —
+Task 28's cluster took 3 apply attempts (account guardrail Lambda auto-stop, then a real
+missing-kubeadm-prerequisites bug, both found and fixed live) before converging in ~3.5 minutes
+and passing every one of the plan's Step 5 checks plus an external `curl`. Tasks 29–31
+(`iam`/`s3`/`dynamodb`/`sqs`, `monitoring`+`dev`/`prod`, validation+cleanup) are all
+validate-only per the plan's own text, confirmed before starting each time — no `dev`/`prod`/
+`monitoring` AWS resources have ever been applied. The same recurring HCL block-syntax bug
+(plan snippets condensing multi-argument blocks onto one `;`/`,`-separated line) appeared 5
+times across Tasks 27–30 and was fixed identically each time; `monitoring`'s multi-line blocks
+correctly did *not* have it. Task 31 also resolved all 4 items flagged along the way: pinned
+`aws` to `~> 6.58` in all three environment roots (user-approved), ran `terraform fmt -recursive`
+across the whole tree (8 files, cosmetic only), decided to document (not fix) `dynamodb`'s 4
+deprecation warnings, and resolved the `terraform_remote_state` doc/code mismatch by correcting
+`design.md` §9 rather than the code (user-approved — `dev`/`prod` stay decoupled from `shared`'s
+state by design). **The Task 28 cluster is still `running` and billing as of this entry** — see
+the Phase 6 Task 31 entry's closing summary below for the full list of what's still open before
+Phase 7. All five tasks on `feature/phase-6-terraform`, not yet pushed/merged. Pre-work
+re-verified the GitHub-auth follow-up empirically (env var alone is insufficient, still
+unscheduled to any phase; see the Open Questions entry) before starting Task 27.**
 **Branch pattern in use:** `feature/phase-<N>-<short-description>`, one PR per phase (docs-only
 housekeeping like this entry uses `docs/<short-description>` instead)
-**Current branch:** `feature/phase-5-frontend` (cut fresh from `main` after confirming PR #13
-merged; local `main` was stale again — see note below, same class of issue as the Phase 4
-session-start correction).
-**Last merged:** Phase 4 (Tasks 18–22, `backend/api`) → `main` via PR #13
-(2026-08-09T19:10:18Z).
+**Current branch:** `feature/phase-6-terraform` (cut fresh from `main` after confirming PR #14
+merged; local `main` was stale again by 14 commits — see the Phase 6 pre-work entry below, same
+class of issue as every prior phase's session-start correction).
+**Last merged:** Phase 5 (Tasks 23–26, `frontend`) → `main` via PR #14 (2026-08-09T19:59:40Z).
 **Session-start correction:** local `main` was behind `origin/main` by 13 commits (the PR #13
 merge happened upstream but hadn't been fetched locally). Confirmed via `gh pr list` (PR #13
 shown MERGED) before trusting it, then `git fetch origin` + `git checkout main` +
@@ -1260,6 +1272,506 @@ cases, no duplication of each page's own already-existing coverage.
 
 ---
 
+### Phase 6 — Terraform — Task 27 (`networking` module + `shared` environment scaffolding) ✅ complete
+
+- Branch: `feature/phase-6-terraform`, cut from `main` after confirming PR #14 (Phase 5) merged
+  (local `main` was 14 commits behind `origin/main`, same stale-clone pattern as every prior
+  phase — confirmed via `gh pr list` before trusting it, then `git fetch` + `git pull --ff-only`,
+  `ffde7be` → `84c7536`).
+- **Pre-work (before Task 27): re-verified the GitHub-auth follow-up empirically instead of
+  trusting the existing log entry's wording.** Confirmed Phase 6 (Tasks 27–31) has no GitHub/MCP
+  scope at all, and live-tested `ghcr.io/github/github-mcp-server:latest` (`v1.8.0`) directly:
+  `GITHUB_PERSONAL_ACCESS_TOKEN` set in the container's own environment does **not** satisfy HTTP
+  mode's auth — an unauthenticated request still gets `401` with a
+  `WWW-Authenticate: Bearer resource_metadata=...` challenge; a request with a real
+  `Authorization: Bearer` header succeeds. Conclusion: a token-injecting sidecar/gateway is
+  genuinely needed and remains **explicitly unscheduled** (not assigned to Phase 6 or 7). Full
+  evidence and the corrected Open Questions entry are below; committed alone
+  (`3d369ac docs: correct project-log's GitHub-auth follow-up...`) before starting Task 27 itself.
+- **Task 27 ✅**, implemented from plan.md with two syntax fixes (both confirmed empirically via
+  `terraform init`, not just by inspection) and one plan-gap fill:
+  1. **Real, confirmed bug: the plan's `main.tf` snippet writes the security group's
+     `ingress`/`egress` blocks as semicolon-separated single lines**
+     (`ingress { description = "..."; from_port = 22; ... }`) — this is invalid HCL. Confirmed
+     empirically: ran `terraform init` against the literal snippet first, got
+     `Error: Invalid character` / `Error: Invalid single-argument block definition` pointing at
+     line 35. Fixed by expanding each `ingress`/`egress` block to one argument per line (standard
+     HCL block syntax) — same six blocks, same argument values, no semantic change.
+  2. **Real, confirmed bug: the plan's `variables.tf` snippets use comma-separated single-line
+     variable blocks** (`variable "admin_cidr" { type = string, description = "..." }`,
+     and `shared/variables.tf`'s `aws_region` the same way) — also invalid HCL (`Error: Invalid
+     single-argument block definition`, same class of error as #1). Fixed the same way — one
+     argument per line, values unchanged. Both bugs are the same underlying mistake (the plan's
+     condensed one-line presentation isn't valid Terraform syntax, only valid-looking shorthand),
+     not two independent issues.
+  3. **Plan gap, flagged rather than silently filled: `terraform/environments/shared/backend.tf`
+     is listed in Task 27's Files list but no task anywhere in plan.md shows its content** —
+     grepped the full plan and design.md for `backend.tf`/`backend "s3"`/`tfstate`; the only hits
+     are Task 30's `dev`/`prod` `main.tf`, which reads `shared`'s state via
+     `terraform_remote_state` with `backend = "local"` (Terraform's implicit default when no
+     `backend` block is configured — needs no file content to work) and a comment
+     (`# or "s3" with a real backend config — see backend.tf`) that treats `backend.tf` as a
+     reserved-but-unused location for a future remote backend, never actually defining one.
+     Task 31's own validation command (`terraform init -backend=false`) forces local state
+     regardless, so this file's content has no effect on anything the plan itself checks. Filled
+     it with a comment-only placeholder documenting exactly this (local state is the default;
+     file reserved for a future `backend "s3"` block) — inert, zero effect on `init`/`validate`,
+     easy to replace later if remote state is adopted. Not a stop-and-ask case per CLAUDE.md's
+     dependency-version-bump carve-out (nothing to approve, no version change) — flagged here per
+     the "explain, don't silently make" rule instead.
+  4. **Not a bug, not fixed:** `shared/main.tf`'s `provider "aws" {}` block has no matching
+     `required_providers.aws` entry (only `random`/`tls`/`local` are declared) — this is the
+     plan's own literal text, and Terraform's implicit-provider inference from the `aws_*`
+     resource-type prefix handles it fine; `terraform init` resolved `hashicorp/aws v6.58.0`
+     (latest, unconstrained) alongside `random v3.9.0`/`tls v4.3.0`/`local v2.9.0` (all satisfying
+     their `~>` constraints). Flagging only because an unconstrained provider can resolve to a
+     different version on a future `init` — not a version bump I made or am asking to make, just
+     the plan's as-written behavior, worth knowing about before Task 28 adds `ec2` resources on
+     top of it.
+  - **Validation:** `cd terraform/environments/shared && terraform init && terraform validate` —
+    `Success! The configuration is valid.` (re-run clean from a fresh `.terraform`/lock-file
+    state to confirm it isn't order-dependent). No `terraform apply` run — out of scope per the
+    plan (Task 31 documents the real apply order; that's a real-AWS-spend action requiring
+    explicit confirmation first).
+  - `terraform fmt -recursive -check -diff` (run informationally, not required by this task) flags
+    one cosmetic misalignment in `aws_subnet.public`'s `=` columns — present verbatim in the
+    plan's own snippet, left as-is since Task 31 is explicitly the task that runs `fmt` across the
+    whole tree.
+  - `.gitignore` already covers `.terraform/`, `terraform.tfstate*`, and `*.pem` — no changes
+    needed there for this task. `.terraform.lock.hcl` is committed (Terraform's own
+    recommendation), `.terraform/`'s downloaded provider binaries are not (already gitignored).
+  - No credential/secret handling — this task never touches the GitHub-auth question at all
+    (that's Task 28+/Phase 7 territory); no AWS credentials were used since no `apply` ran.
+
+### Task 28 (`ec2` module — control-plane + worker via kubeadm) — ✅ **complete, cluster verified converged for real (third apply attempt)**
+
+- Created `terraform/modules/ec2/{main,variables,outputs}.tf` +
+  `cloud-init-{control-plane,worker}.yaml.tpl`; wired `module "ec2"` into
+  `terraform/environments/shared/main.tf` alongside Task 27's `networking` module, per plan.md.
+- **Three plan-snippet bugs found, all confirmed empirically via `terraform init`/`validate`
+  against the literal snippets first, not by inspection:**
+  1. & 2. **Same class of bug as Task 27's two findings, reproduced fresh here:**
+     `ec2/variables.tf`'s `instance_type` used a comma-separated single-line block
+     (`variable "instance_type" { type = string, default = "t3.large" }`) — invalid HCL,
+     confirmed via `Error: Invalid single-argument block definition` pointing at the exact line.
+     Fixed the same way as Task 27 (one argument per line, values unchanged). This is now the
+     second phase-6 task with this exact mistake in the plan's own condensed one-liner
+     presentation — worth expecting again in Tasks 29/30.
+  3. **New bug class, only catchable by provider-schema validation, not syntax
+     inspection:** `local_sensitive_file.ssh_private_key` used `file_permissions` (plural) —
+     `terraform validate` (which loads the initialized `local` provider's real schema, not just
+     HCL grammar) failed with `Error: Unsupported argument ... Did you mean "file_permission"?`.
+     Fixed by renaming to the singular `file_permission`, value (`"0600"`) unchanged. This
+     wouldn't have been caught by `terraform fmt` or syntax review alone — only by actually
+     initializing the provider and validating against its schema, same "run it for real, don't
+     just read it" discipline as every prior phase's health checks.
+- **Plan-list inaccuracies, flagged rather than silently resolved:**
+  - Task 28's Files list says "Modify: `terraform/environments/shared/main.tf`, `variables.tf`"
+    but Step 4 only shows a `main.tf` diff — no new root variable is actually needed for the
+    `ec2` wiring (`instance_type` has a module-level default; `public_subnet_id`/
+    `security_group_id` come from `module.networking`'s own outputs, not new user-supplied
+    variables). Left `shared/variables.tf` unchanged rather than inventing an unneeded variable.
+  - Step 4 also says to append `*.pem` and the specific
+    `terraform/environments/shared/testscope-k8s-keypair.pem` path to `.gitignore` — both are
+    already fully covered by the `*.pem` line Task 27 added (see Task 27 entry above). Skipped
+    re-adding to avoid a duplicate/redundant line; `git check-ignore` behavior is unchanged
+    either way.
+- **Noted, not acted on (per the user's explicit instruction — this is the same unconstrained
+  `aws` provider flagged in Task 27, still not pinned by any task's plan text):** `terraform init`
+  in this task's own directory re-resolved `hashicorp/aws` — landed on the same `v6.58.0` as
+  Task 27's init (no drift observed between the two), alongside `random v3.9.0`/`tls v4.3.0`/
+  `local v2.9.0` all still satisfying their `~>` constraints. Not a version bump made or
+  requested — just confirming the earlier flag hasn't silently become a problem yet.
+- **Validation:** `terraform init && terraform validate` — `Success! The configuration is
+  valid.` `terraform fmt -check -diff` (informational only) flags the `module "ec2"` block's
+  column alignment, present verbatim in the plan's own snippet — left for Task 31.
+- **`terraform plan -var="admin_cidr=176.229.150.57/32"` reviewed and shown to the user first**
+  (this machine has real, live AWS credentials — `aws sts get-caller-identity` resolves to
+  account `228281126655`) — 15 resources to add, 0 to change, 0 to destroy, security group
+  correctly scoped `admin_cidr` to SSH/6443 only. User confirmed the plan before any `apply` ran.
+- **First `apply` attempt: partial failure, a real plan bug only catchable by the live AWS API.**
+  13 of 15 resources created, then failed on the security group's ingress rules:
+  `from_port (0) and to_port (65535) must both be 0 to use the 'ALL' "-1" protocol!` — the
+  plan's "Cluster-internal" self-referencing rule (`protocol = "-1"`, `from_port = 0`,
+  `to_port = 65535`) violates an AWS API constraint that `terraform validate` has no way to
+  check (it's AWS-side semantics, not HCL/provider schema). No `aws_instance` had been created
+  yet at this point (they depend on the security group's output) — **zero compute billing**
+  during this failure. Fixed `to_port` from `65535` to `0` — semantically identical, since AWS
+  ignores the port range entirely for protocol `-1` (already means "all ports"); this only
+  satisfies the API's validation, doesn't change what the rule allows.
+- **Second `apply` attempt (after the fix): blocked by a real, intentional account guardrail,
+  not a bug.** `403 UnauthorizedOperation` on `ec2:RunInstances`, explicit deny. Decoded via
+  `aws sts decode-authorization-message` (read-only) rather than guessing: an IAM policy named
+  **`DenyLargeInstanceTypes`** blocks `ec2:RunInstances`/`ec2:ModifyInstanceAttribute` for
+  anything outside `{t2,t3,t4g}.{nano,micro,small,medium}` — the plan's `instance_type` default
+  (`t3.large`) is one size above the allowed ceiling. **Flagged to the user rather than silently
+  routed around; user chose `t3.medium`** (largest allowed). Changed `ec2/variables.tf`'s default
+  from `t3.large` to `t3.medium`, with an inline comment recording why. Still zero compute
+  billing at this point (still no `aws_instance` created).
+- **Third `apply` attempt: blocked by a second account guardrail, same pattern.** New explicit
+  deny, this time on the EBS volume resource. Decoded the same way: **`LimitVolumeSize`** denies
+  any EC2 volume over 30GB — the plan's `root_block_device { volume_size = 40 }` exceeds it.
+  Flagged to the user; **user chose 30GB** (the max allowed). Changed both instances'
+  `root_block_device.volume_size` from `40` to `30` in `ec2/main.tf`, with an inline comment.
+- **Fourth `apply` attempt: succeeded.** `Apply complete! Resources: 2 added, 0 changed, 0
+  destroyed.` Real resources created:
+  - `control_plane`: instance `i-06bab93b4c588e5c3`, public IP `3.87.92.4` (at creation time)
+  - `worker`: instance `i-0819b40cfaece6ae4`, public IP `54.242.230.30` (at creation time)
+  - `worker_iam_role_arn`: `arn:aws:iam::228281126655:role/testscope-k8s-worker-role`
+  - `ssh_private_key_path`: `./testscope-k8s-keypair.pem`, confirmed `-rw-------` (0600),
+    owned by the local user, never printed/logged
+  - Both launched `2026-08-09T20:50:3x/5xZ` UTC.
+- **Cluster-convergence verification (Step 5) could NOT be completed — the actual outcome, not
+  "apply succeeded":** while polling `cloud-init status --wait` over SSH on the control-plane,
+  the SSH session was cut and both instances' public IPs disappeared. `describe-instances`
+  showed both **`stopped`** (`Client.UserInitiatedShutdown`). Root-caused via CloudTrail (read-only
+  `aws cloudtrail lookup-events`): an automated Lambda, `aws-learning-budget-keeper-function`
+  (role `LearningBudgetKeeperLambdaRole`), issued `StopInstances` against both instances at
+  **2026-08-09T21:00:5xZ** — roughly **10 minutes after launch**. This Lambda runs on a fixed
+  schedule via EventBridge rule `learning-budget-keeper-schedule`
+  (`cron(0 13,21 * * ? *)` — every day at **13:00 and 21:00 UTC**), confirmed via `aws events
+  list-rules` (read-only). Ten minutes is nowhere near enough time for cloud-init's
+  apt-get-install-through-metrics-server sequence to finish, so **kubeadm never converged** —
+  this is an account-level constraint discovered live, not a code or config defect in Task 28
+  itself. **Not investigated further and not acted on** (no attempt to modify, pause, or route
+  around the Lambda/EventBridge rule — that's the user's account automation and their call).
+- **Current real state (as of this entry): both instances `stopped`, not terminated** — EBS
+  volumes and all other resources intact. Public IPs deallocated (normal AWS behavior for a
+  stopped non-Elastic-IP instance) — the IPs above are now stale. **Operationally important:**
+  simply restarting these two specific stopped instances will *not* re-run cloud-init's
+  `runcmd` — cloud-init treats a stop/start of the same instance-id as "first boot already
+  happened" and will not redo the kubeadm bootstrap, so whatever partial state apt/kubeadm was
+  in when power was cut is what's there now (not a working cluster). A clean redo needs a fresh
+  `terraform destroy`/`apply` cycle (new instance-ids → cloud-init runs fresh), timed to land
+  outside the 13:00/21:00 UTC stop windows.
+- **Billing status at time of writing:** both instances `stopped` → EC2 compute charges paused
+  (AWS does not bill compute time for stopped instances), no public-IPv4 charge (address
+  released). The two 30GB root EBS volumes are still live and still billing their small storage
+  cost (~$4.80/month combined) until the instances are destroyed. Full instance-hour billing
+  would resume immediately if/when the instances are restarted or replaced.
+- Code committed on `feature/phase-6-terraform` — module/wiring fixes (`t3.medium`, `30GB`)
+  included.
+- **User confirmed the instances were unrecoverable (cloud-init won't re-run on a stop/start of
+  the same instance-id) and directed a full teardown.** Ran `terraform plan -destroy` first and
+  showed the exact 15-resource list before doing anything else — matched the 15 resources this
+  same `apply` had created, `0 to add, 0 to change, 15 to destroy`, nothing partial or
+  unexpected. User confirmed; ran `terraform destroy -auto-approve` with the same `admin_cidr`.
+  **`Destroy complete! Resources: 15 destroyed.`**
+- **Verified nothing billing-relevant remains — via `terraform state list` (empty) and, more
+  importantly, direct live AWS checks (not just trusting Terraform's own bookkeeping), each
+  scoped to this project's own tagged/named resources rather than a broad account-wide scan**
+  (this AWS account turned out to be a shared multi-tenant classroom/learning account with many
+  other users' resources visible on an unfiltered `describe-instances` — noted for awareness,
+  not investigated further, and nothing from it is recorded here beyond that fact):
+  - Both EC2 instances (`i-06bab93b4c588e5c3`, `i-0819b40cfaece6ae4`): `terminated`.
+  - EBS volumes tagged `testscope-*`: none (`[]`) — the two 30GB root volumes went with their
+    instances via `delete_on_termination` (the plan's default, never overridden).
+  - VPC tagged `testscope-vpc`, security group named `testscope-k8s-cluster`: none (`[]`).
+  - Key pair `testscope-k8s-keypair`: `InvalidKeyPair.NotFound` (confirms deleted).
+  - IAM role `testscope-k8s-worker-role` / instance profile `testscope-k8s-worker-profile`:
+    `NoSuchEntity` (confirms deleted).
+  - Local `testscope-k8s-keypair.pem`: no longer on disk (destroyed by
+    `local_sensitive_file`'s own destroy).
+  - **No billing-relevant resources remain from this apply.** The only real-money exposure this
+    session was the ~10 minutes both `t3.medium` instances were actually running before the
+    budget-keeper Lambda stopped them, plus a few hours of two 30GB EBS volumes existing before
+    this destroy — both trivial.
+- **Retry, timed by the user for ~7 hours of margin before the next 13:00 UTC (16:00 Jerusalem)
+  budget-keeper window: `terraform apply -var="admin_cidr=176.229.150.57/32"` (plan already
+  reviewed in the prior attempt, auto-approve used per the user's explicit instruction).**
+  Succeeded cleanly, 15/15 resources, no guardrail/API errors (both fixes from the prior attempt
+  held). New instances: `control_plane` `i-071f33fcd461aa949` (`13.220.54.97`), `worker`
+  `i-00f5f584bf5de5a46` (`3.95.219.158`). **Actively monitored, not just polled once** — SSH in
+  repeatedly to check `cloud-init status` and tail `/var/log/cloud-init-output.log` on both
+  instances rather than assuming success.
+- **A second real, confirmed bug found this way — cloud-init was not actually stuck, it was
+  looping forever on a bug that had already failed:** after ~20 minutes both instances still
+  showed `cloud-init status: running`, which is unusual on its own — checked the actual log
+  content (not just the status field) rather than continuing to wait, and found `kubeadm init`
+  had failed at the very first preflight check:
+  `[ERROR FileContent--proc-sys-net-ipv4-ip_forward]: /proc/sys/net/ipv4/ip_forward contents are
+  not set to 1`. **Root cause: plan.md's `cloud-init-control-plane.yaml.tpl`/
+  `cloud-init-worker.yaml.tpl` never set the standard, always-required kubeadm networking
+  prerequisites** (`br_netfilter`/`overlay` kernel modules, `net.ipv4.ip_forward=1`,
+  `net.bridge.bridge-nf-call-iptables=1`) before calling `kubeadm init`/`kubeadm join` — a plain
+  omission from the plan's own script, not an environment quirk. Because `kubeadm init` never
+  produced `/etc/kubernetes/admin.conf`, every subsequent `kubectl` call in the script failed,
+  including the one inside `until kubectl ... get deployment ingress-nginx-controller ...; do
+  sleep 5; done` — that loop could **never** exit on its own (kubectl would never succeed), which
+  is why `cloud-init status` stayed `running` indefinitely rather than erroring out cleanly. The
+  worker was independently stuck in its own `until nc -z ... 6443; do sleep 10; done` loop for
+  the same underlying reason (API server never started). Neither instance would have converged
+  no matter how long they were left running.
+  - **Fixed in both templates** (control-plane and worker both run `kubeadm init`/`kubeadm join`
+    and both hit the identical preflight check) by adding the standard, official kubeadm
+    prerequisite sequence right after the `containerd` restart and before the Kubernetes apt
+    repo setup: load `overlay`/`br_netfilter` kernel modules, write
+    `net.bridge.bridge-nf-call-iptables`/`net.bridge.bridge-nf-call-ip6tables`/`net.ipv4.ip_forward`
+    to `/etc/sysctl.d/k8s.conf`, `sysctl --system`. User confirmed destroy-fix-reapply rather than
+    continuing to inspect the stuck instances.
+  - Destroyed the broken instances first (`terraform destroy -auto-approve`, ran in the
+    background past the 120s foreground limit — confirmed complete via a direct
+    `aws ec2 describe-instances` check rather than waiting on buffered output, then
+    `Destroy complete! Resources: 15 destroyed.` once the buffered log flushed), applied the
+    cloud-init fix, `terraform validate` clean, re-applied.
+- **Third apply attempt: succeeded, and the cluster converged for real this time — verified, not
+  assumed.** New resources: `control_plane` `i-0887a982c0501958c` (`107.23.155.19`), `worker`
+  `i-0606ccf79b1c0c1af` (`3.80.37.183`). Monitored the same way (repeated `cloud-init status` +
+  log tail checks, not a single poll):
+  - `apply` invoked 06:37:10 UTC → completed 06:38:23 UTC.
+  - Control-plane `cloud-init status: done` at 06:39:06 UTC.
+  - Worker `cloud-init status: done` at 06:39:22 UTC (`kubeadm join` succeeded — log showed the
+    standard "Run 'kubectl get nodes' on the control-plane to see this node join the cluster").
+  - All pods across all namespaces reached `Running`/`Completed` by 06:40:44 UTC (polled every
+    20s, checked via `kubectl get pods -A` for anything not in those two states).
+  - **Total wall-clock from `apply` invocation to fully-converged cluster: ~3.5 minutes** — far
+    faster than the ~7-hour safe margin before the next budget-keeper window; gives a real,
+    observed number for planning future applies/retries instead of guessing.
+  - **Verified against the plan's exact Step 5 success criteria, not just "pods are Running":**
+    `kubectl get nodes` — both `Ready` (`ip-10-0-1-35` control-plane, `ip-10-0-1-176` worker).
+    `kubectl get pods -n ingress-nginx` — controller `1/1 Running`; confirmed `hostNetwork: true`
+    genuinely took effect (not just set in the spec) via
+    `kubectl get pod ... -o jsonpath='{.status.hostIP} {.status.podIP}'` — both equal
+    `10.0.1.176`, the worker's own node IP, exactly the plan's stated proof criterion.
+    `kubectl get pods -n kube-system -l k8s-app=metrics-server` — `1/1 Running`; functionally
+    confirmed (not just pod-status) via `kubectl top nodes`, which returned real CPU/memory
+    numbers for both nodes. Calico (`calico-node` ×2, `calico-kube-controllers` ×1, all in
+    `kube-system` — this Calico manifest version doesn't use a separate `calico-system`
+    namespace, unlike some others) — all `Running`.
+  - **Extra, beyond-the-plan verification:** `curl http://<worker_public_ip>/` from this machine
+    directly (not via SSH, a genuine external request) — `HTTP 404`, ingress-nginx's own default
+    backend response (expected and correct, since no application `Ingress` resource exists yet)
+    — proves the controller is really listening on the worker's public IP via `hostNetwork`,
+    reachable from the real internet, not just internally reachable within the VPC.
+- **Status: Task 28 is genuinely complete** — module code committed, real cluster stood up and
+  independently verified converged against every one of the plan's Step 5 criteria plus one
+  extra external check. Cluster is currently live and **billing** — both `t3.medium` instances
+  running, will be auto-stopped by the account's budget-keeper Lambda at 13:00 UTC (16:00
+  Jerusalem) if still running at that time.
+
+### Task 29 (`iam`/`s3`/`dynamodb`/`sqs` modules, parameterized by `env`) — ✅ complete, validate-only (no `apply` — plan doesn't call for one)
+
+- Created `terraform/modules/{iam,s3,dynamodb,sqs}/*` per plan.md — four standalone,
+  independently-validated modules, none wired into any environment yet (that's Task 30's job).
+  Confirmed against plan.md before starting: **Task 29's own Step 5 is validate-only**
+  (`for m in s3 dynamodb sqs iam; do terraform init -backend=false && terraform validate; done`)
+  — no `apply` anywhere in this task's text, and these modules have no environment root to apply
+  *from* yet regardless (`dev`/`prod` don't exist until Task 30). So there was nothing to apply
+  and, per the user's specific ask, no possibility of a new account-guardrail IAM deny surfacing
+  this session — that check only becomes possible once Task 30 actually applies these modules
+  for real.
+- **One plan-snippet bug found, same class as Tasks 27/28's recurring one, confirmed empirically
+  via `terraform validate` against the literal snippet first:** `dynamodb/main.tf`'s four
+  `attribute` blocks used semicolon-separated single-line arguments
+  (`attribute { name = "analysis_id"; type = "S" }`) — invalid HCL, same
+  `Error: Invalid character`/`Invalid single-argument block definition` as Task 27's
+  ingress/egress blocks and identical in shape. Fixed the same way: one argument per line, values
+  unchanged. This is now the **third** occurrence of this exact plan-authoring mistake across
+  Phase 6 (Task 27's `ingress`/`egress`, Task 28's `instance_type`/`file_permissions`-adjacent
+  variable blocks, now this) — condensed single-line block syntax in the plan's own snippets is
+  reliably wrong wherever it appears; worth assuming Task 30's `monitoring` module snippet
+  (`aws_cloudwatch_metric_alarm`, similar block-heavy shape) will need the same treatment.
+- **Not a bug — worth distinguishing from the above:** the `iam` module's inline policy
+  statements (`{ Effect = "Allow", Action = [...], Resource = "..." }`, comma-separated on one
+  line inside `jsonencode({...})`) validated cleanly with no changes needed. These are HCL
+  **object-constructor expressions** (map literals), not block syntax — commas *are* valid there,
+  newlines are also valid; only block syntax (`resource`/`variable`/`ingress`/`attribute`/etc.)
+  forbids commas. Confirmed by the fact `terraform validate` raised zero complaints about this
+  file, unlike the three prior findings — checked deliberately before assuming this task would
+  have a fourth instance of the same bug class.
+- **Deprecation warning, not an error, not fixed:** `dynamodb/main.tf` validates with `Success!`
+  but 4 warnings — `hash_key is deprecated. Use key_schema instead` (the top-level `hash_key` plus
+  3 more from the same underlying cause, likely the GSIs' `hash_key`/`range_key` args under the
+  currently-resolved `hashicorp/aws v6.58.0`). Plan's snippet still works as written and this
+  doesn't block anything `terraform validate`/`plan`/`apply` check for — left as-is rather than
+  rewriting to `key_schema`, consistent with the "don't diverge from the plan's literal snippets
+  over non-blocking findings" precedent already set for Tasks 27/28's `fmt`-only issues (deferred
+  to Task 31, which is the task that actually owns a repo-wide cleanup pass).
+- **Validation:** `terraform init -backend=false && terraform validate` — `Success!` for all four
+  modules (`s3`, `sqs`, `iam` with zero warnings; `dynamodb` with the 4 deprecation warnings
+  noted above, still `Success!`). Each module's own `.terraform.lock.hcl` committed per
+  Terraform's own recommendation, matching Tasks 27/28's precedent.
+- **Environment note, not a plan issue:** `terraform init`/`validate` in this sandboxed
+  environment intermittently hung for 15–60+ seconds *after* printing `Success!` — root-caused to
+  Terraform's default "checkpoint" upgrade-check phoning home, likely slow/blocked on this
+  network. Added `CHECKPOINT_DISABLE=1` to `~/.bashrc` (a local tooling speedup, not a repo
+  change) rather than re-diagnosing this again in Task 30/31.
+- No credential/secret handling, no AWS resources created or touched (validate-only, no live AWS
+  calls beyond provider-plugin download/registry lookups).
+
+### Task 30 (`monitoring` module + `dev`/`prod` environments) — ✅ complete, validate-only (no `apply` — plan doesn't call for one, confirmed before starting per the user's explicit ask)
+
+- Created `terraform/modules/monitoring/{main,variables}.tf` and
+  `terraform/environments/{dev,prod}/{main,variables,backend}.tf` per plan.md — this is the
+  first task wiring `networking`/`ec2`/`iam`/`s3`/`dynamodb`/`sqs`/`monitoring` together into
+  real environment roots, but doing so is still validate-only: Task 30's own Step 3 is
+  `terraform init -backend=false && terraform validate` for `dev`/`prod`, no `apply` anywhere in
+  this task's text. **Confirmed explicitly before starting, per the user's specific question:**
+  no real apply happens in Task 30, so there was no possibility of this creating a second live
+  cluster alongside Task 28's — `dev`/`prod` don't touch `ec2`/`networking` at all (they only
+  wire `s3`/`dynamodb`/`sqs`/`iam`/`monitoring`), and even those aren't applied here. (For
+  context, not part of this task: the Task 28 cluster was still `running`, not yet auto-stopped,
+  as of this task's start — unrelated to Task 30's own scope.)
+- **Plan-snippet bugs found: exactly the two predicted, both confirmed empirically via
+  `terraform validate`/`init` against the literal snippets first, not assumed from precedent
+  alone:**
+  1. `dev/variables.tf` (and identically `prod/variables.tf`, same snippet substituted verbatim):
+     `variable "aws_region" { type = string, default = "us-east-1" }` — the same
+     comma-separated single-line block bug as Task 27's `shared/variables.tf` and Task 28's
+     `ec2/variables.tf`. Fixed the same way, values unchanged.
+  2. `dev/main.tf`'s (and `prod/main.tf`'s) three `module` one-liners —
+     `module "s3" { source = "../../modules/s3"; env = "dev" }` (and identically for
+     `dynamodb`/`sqs`) — the same semicolon-separated single-line block bug as Task 27's
+     `ingress`/`egress` and Task 29's `attribute` blocks. `terraform init`/`validate` only
+     surfaced the first (`module "s3"`) explicitly before stopping enumeration in that file, but
+     since `dynamodb`/`sqs` are byte-identical in shape, fixed all three preemptively rather than
+     rediscovering the same bug twice more; re-validated clean afterward, confirming no further
+     surprises in that file. Fixed the same way — one argument per line, values unchanged.
+  - **Correctly predicted NOT to have the bug, and confirmed clean:** the `monitoring` module's
+    `aws_cloudwatch_metric_alarm` blocks are fully multi-line in the plan's own snippet (each
+    argument already on its own line, including `dimensions = { QueueName = "..." }`, which is a
+    single-key object-constructor value assignment — not block syntax, and not this bug class
+    regardless of key count). Validated clean on the first pass, no fix needed — checked
+    deliberately rather than assuming every block-shaped resource in this task would need the
+    same treatment, same discipline as Task 29's `iam` module finding.
+- **Plan-doc/code inconsistency, flagged rather than silently resolved or silently ignored:**
+  Task 30's own **Interfaces** text states `dev`/`prod` consume `worker_iam_role_arn`,
+  `control_plane_public_ip`, `worker_public_ip` "from `environments/shared` ... referenced via
+  `terraform_remote_state` data source" — and the `data "terraform_remote_state" "shared"` block
+  is indeed declared in both `main.tf` files. **But nothing in either file's actual code reads
+  `data.terraform_remote_state.shared.outputs.*` anywhere** — `module "iam"`'s
+  `instance_role_name` is a hardcoded literal `"testscope-k8s-worker-role"` instead, and
+  `control_plane_public_ip`/`worker_public_ip` aren't referenced at all in this task's code.
+  Not fixed: the hardcoded string happens to be correct (it's exactly what Task 28's `ec2` module
+  names the role), so nothing is functionally broken and `terraform validate` raises no complaint
+  about the unused data source — but the Interfaces text and the actual code disagree about
+  *how* that value gets there. Left as a documentation/code mismatch to be aware of, not silently
+  smoothed over by rewriting the code to match the prose (that would be more than the minimal fix
+  this task's own validate step calls for) or by editing the prose (out of scope for implementing
+  a task, not documenting one).
+- **Validation:** `terraform init -backend=false && terraform validate` — `Success!` for
+  `monitoring`, `dev`, and `prod` (the latter two carry the same 4 non-blocking `dynamodb`
+  `hash_key`/`range_key` deprecation warnings already noted in Task 29, nothing new). Each
+  directory's own `.terraform.lock.hcl` committed per established precedent.
+- No credential/secret handling, no AWS resources created or touched.
+
+### Task 31 (Terraform validation and documented apply order) — ✅ complete, Phase 6's designated cleanup point for everything flagged in Tasks 27–30
+
+- **Confirmed against plan.md before starting:** Task 31's own scope is fmt + validate + a
+  documentation file (`terraform/README.md`) — "Interfaces: none — this task documents and
+  verifies, it doesn't add new resources." No `apply` anywhere in this task's text either.
+- **Item 1 — `aws` provider left unconstrained (flagged Task 27): asked before deciding, per
+  standing convention.** User chose to pin to `~> 6.58` (matching the version resolved
+  consistently across every `init` this phase — Tasks 27–30 all landed on `v6.58.0`, zero
+  drift observed). **Implementation note beyond what the question anticipated:** `shared` was
+  the only root with a `required_providers` block at all (for `random`/`tls`/`local`) — `dev`
+  and `prod` had *no* `required_providers` block whatsoever, meaning each would independently
+  resolve "latest `aws`" on its own `init`, completely unaffected by anything declared in
+  `shared` (separate Terraform root configurations don't share provider constraints). Added the
+  `~> 6.58` pin to all three roots' own `required_providers` blocks, not just `shared`'s, so the
+  pin is actually effective everywhere. Re-validated all three afterward — `Success!` for all,
+  same `v6.58.0` resolved, lock files now record the constraint (hashes/version unchanged, only
+  a new `constraints = "~> 6.58"` line added — confirmed via diff, not just assumed).
+- **Item 2 — `terraform fmt` cosmetic alignment quirks (flagged Tasks 27/28): user directed to
+  just run it, no question needed.** `terraform fmt -recursive -check -diff` across the whole
+  tree found 8 files with misalignment (the two originally flagged, plus `iam`'s wrapped
+  `Resource` line, `monitoring`'s and `sqs`'s inline-comment spacing, and a couple more of the
+  same class not individually flagged before) — all purely whitespace, zero semantic diffs (spot
+  checked the diff output before applying). Ran `terraform fmt -recursive` (no `-check`) to fix,
+  re-ran `-check` to confirm clean (exit 0). Re-ran `fmt -check` once more after the provider-pin
+  edits (which touched 3 of the same files) to confirm those hand-edits didn't reintroduce drift
+  — still clean.
+- **Item 3 — `dynamodb`'s 4 `hash_key`/`range_key` deprecation warnings (flagged Task 29): decided
+  document, not fix — this one didn't need to be asked (no version bump, no design tradeoff, just
+  an implementation-style choice), so decided directly per the user's "decide fix vs document,
+  flag which" instruction.** Reasoning: migrating to `key_schema` changes the resource's
+  attribute shape beyond a same-values reformat (unlike every other fix this phase), and would be
+  the first Phase 6 change to genuinely diverge from the plan's snippet rather than just correct
+  its HCL syntax — consistent with the standing "don't diverge from the plan's literal snippets
+  over non-blocking findings" precedent already applied to the `fmt`-only quirks in Tasks 27/28.
+  No live `dynamodb` table has ever been applied from this config (Tasks 29–31 are all
+  validate-only), so there's no risk of the warning masking a real behavioral issue today either.
+  Documented here and in `terraform/README.md`'s provider-versions note is *not* where this
+  lives — it's `hash_key`/`range_key` argument-level, not provider-version-level, so recorded
+  only in this log entry as the authoritative "decided, not forgotten" record.
+- **Item 4 — the `terraform_remote_state` doc/code mismatch (flagged Task 30): asked before
+  deciding, per standing convention (explicitly framed as a real design tradeoff, not a
+  syntax fix).** User chose to update the docs to match the code (hardcoded role-name literal),
+  not wire up `terraform_remote_state` for real. **Per this project's established convention of
+  never editing `plan.md`'s historical task text** (deviations get recorded in this log instead;
+  `design.md` is the living technical reference that does get corrected, e.g. §5.2's GitHub
+  tool-name table in Phase 1) — updated `docs/2026-07-30-testscope-ai-design.md` §9's IAM bullet
+  instead of touching `plan.md`'s Task 30 Interfaces text. New sentence explains the hardcoded
+  name is deliberate (keeps `dev`/`prod` decoupled from `shared`'s state file, at the cost of the
+  role name being a convention rather than something Terraform enforces structurally) and notes
+  the tradeoff explicitly for anyone revisiting this later. `data
+  "terraform_remote_state" "shared"` stays declared-but-unused in `dev`/`prod`'s `main.tf` —
+  removing it wasn't part of either option the user was offered, and it's harmless as-is.
+- **Full validation pass (Step 2), all three roots, run twice (once before the two decisions'
+  code changes, once after, to confirm neither introduced a regression):**
+  `terraform init -backend=false && terraform validate` for `shared`, `dev`, `prod` — all
+  `Success!` both times. `dev`/`prod` still carry the same 4 non-blocking `dynamodb` deprecation
+  warnings (Item 3, deliberately not fixed); `shared` and `monitoring` clean with zero warnings.
+  **`shared`'s real `terraform.tfstate` (the live, currently-`running` cluster from Task 28)
+  confirmed untouched throughout** — `-backend=false` and deleting `.terraform`/
+  `.terraform.lock.hcl` only affect provider-plugin caching/lock metadata, never the state file
+  itself; verified via `terraform state list` still showing all 15 real resources before and
+  after.
+- **`terraform/README.md` written** — the plan's own apply-order text (Step 3), plus three
+  sections the plan's literal snippet doesn't have, added because writing the apply order
+  without them would be actively misleading given what Tasks 28-31 actually found: (1) **Known
+  account-specific constraints** — `DenyLargeInstanceTypes`/`LimitVolumeSize` and their resulting
+  `t3.medium`/30GB defaults, and the `aws-learning-budget-keeper-function` Lambda's 13:00/21:00
+  UTC daily auto-stop schedule, including the "stopped instances don't self-heal, cloud-init
+  won't re-run" operational gotcha from Task 28's second apply attempt; (2) **Provider versions**
+  — records the `~> 6.58` pin decided in this task; (3) **`dev`/`prod` and `shared`'s state —
+  intentionally decoupled** — records Item 4's decision and reasoning inline, not just in this
+  log, since README.md is what someone actually running `apply` will read first.
+- **Environment note, informational only:** each `terraform init -backend=false` invocation in
+  this sandboxed environment took noticeably longer than expected even with
+  `CHECKPOINT_DISABLE=1` and a warm plugin cache (several ran past the 90s foreground limit and
+  moved to background) — consistent with Task 29's finding that this network is just slow for
+  Terraform's registry/provider-download calls generally, not a new or different issue.
+- No credential/secret handling. No AWS resources created, modified, or destroyed by this task
+  itself — `shared`'s live cluster (still `running` as of this task, confirmed via
+  `aws ec2 describe-instances`) is untouched, not because of anything this task did, but because
+  this task never runs `apply`/`destroy` at all.
+
+**Phase 6 closing summary — everything still open before Phase 7 planning starts:**
+
+- **Live, billing AWS resources right now:** `environments/shared`'s cluster — control-plane
+  `i-0887a982c0501958c`, worker `i-0606ccf79b1c0c1af`, both `running` as of this task
+  (2026-08-10, ~07:30 UTC). Will auto-stop at 13:00 UTC (16:00 Jerusalem) via the account's
+  `aws-learning-budget-keeper-function` if still running then — see `terraform/README.md`'s new
+  "Known account-specific constraints" section for the full detail on that Lambda and the two
+  IAM guardrails (`DenyLargeInstanceTypes`, `LimitVolumeSize`). No `dev`/`prod`/`monitoring`
+  resources have ever been applied — those modules are validated-only, zero AWS spend from them.
+- **KNOWN FOLLOW-UP TASK, still explicitly unscheduled to any phase (re-confirmed, not
+  resolved, during this phase's pre-work):** the GitHub-auth gap (`mcp-github`'s HTTP mode
+  requires a per-request `Authorization: Bearer` header; `GITHUB_PERSONAL_ACCESS_TOKEN` env var
+  alone doesn't satisfy it, empirically re-verified before Task 27). Phase 6 had no GitHub/MCP
+  scope at all (confirmed), and Phase 7's Task 33 (`mcp-github` K8s manifests) as currently
+  written only sets a container-level env var, which does **not** close this gap either — see
+  the Open Questions entry below. Worth raising explicitly when Phase 7 planning reaches Task 33.
+- **Still unfixed, unrelated to Terraform, no change this phase:** the `app`/`app` Python
+  package-name import collision (Task 18, Phase 4) — backend-only, doesn't affect anything Phase
+  6 touched. The `frontend/Dockerfile` `package-lock.json` gap (Task 26, Phase 5) — relevant once
+  Phase 7/8 actually build that image for real deployment, not before.
+- **Decided and closed this phase, not carrying forward:** `aws` provider now pinned (`~> 6.58`,
+  all three roots). `dynamodb`'s `hash_key`/`range_key` deprecation warnings — deliberately
+  documented, not fixed (Item 3 above); will keep appearing in every future `dynamodb`
+  `validate`/`plan`/`apply` output in Tasks 32+ — expected, not a new regression each time it
+  shows up again. `terraform_remote_state` doc/code mismatch — resolved via `design.md` §9
+  correction; `dev`/`prod` are intentionally decoupled from `shared`'s state, not a gap.
+- **Pattern worth carrying into Phase 7:** every Phase 6 task that copied plan.md's HCL verbatim
+  hit the same single-line-block-with-`;`/`,`-separators bug (5 for 5 across Tasks 27–30):
+  `terraform validate`/`init` catches it immediately and the fix is always mechanical
+  (one argument per line, values unchanged) — expect it again if Phase 7/8's plan text contains
+  similarly condensed HCL or YAML (Kubernetes manifests, GitHub Actions YAML), and verify
+  empirically the same way rather than assuming a fix is needed or not needed.
+
+---
+
 ## Open Questions / Things to Revisit
 
 - **Correction to Phase 0's "process fix" entry above** (its literal wording is left as the
@@ -1286,7 +1798,7 @@ cases, no duplication of each page's own already-existing coverage.
   was the right call, just for this more precise reason — not "system Python pollution,"
   but "silent fallback to an unrelated pre-existing toolkit masking a missing venv."
 
-- **KNOWN FOLLOW-UP TASK, not yet scheduled to a phase: `POST /api/analyses/{id}/github-issue`
+- **KNOWN FOLLOW-UP TASK, explicitly unscheduled to any phase: `POST /api/analyses/{id}/github-issue`
   is not functional against the real `mcp-github` server as currently deployed** — confirmed by
   live-testing the real `github-mcp-server` container (HTTP mode), which returns `401
   Unauthorized` without a per-request `Authorization: Bearer <token>` header. `backend/api`
@@ -1298,16 +1810,45 @@ cases, no duplication of each page's own already-existing coverage.
   `request_validator`'s `search_repositories` call and `requirement_retriever`'s
   `issue_read`/`get_comments` call have the identical missing-Authorization-header problem, never
   caught because every existing test (worker's and `backend/api`'s) mocks the MCP transport
-  boundary rather than hitting a real server. **Needs an infra-layer fix — most likely a
-  sidecar/gateway in front of `mcp-github` that injects the bearer token per request, keeping the
-  raw token out of both `api`'s and `worker`'s own processes — or a deliberate revision of the
-  "Neither reaches api" boundary if token custody is to be extended.** This is squarely a Phase 6
-  (Terraform)/Phase 7 (Kubernetes manifests) concern, not a single backend code task; recommend
-  scheduling it explicitly when those phases start rather than discovering it again later. Until
-  fixed: `POST /api/analyses/{id}/github-issue` (Task 22), `request_validator` (Task 11), and
-  `requirement_retriever`'s comments fetch (Task 11) will all 401 against a real `mcp-github`
-  deployment, though none of this is visible from any current test suite, all of which pass
-  cleanly by design (mocked transport boundary).
+  boundary rather than hitting a real server.
+  - **Phase 6 pre-work (before Task 27) checked this explicitly, rather than assuming the prior
+    phrasing below was still accurate, and re-verified it empirically instead of just re-reading
+    the old finding:** Phase 6 (Tasks 27–31 — Terraform `networking`/`ec2`/`iam`/`s3`/`dynamodb`/
+    `sqs`/`monitoring` modules) has **no GitHub/MCP scope at all** — grepped the full Phase 6 plan
+    text for github/token/bearer/sidecar/gateway; the only hits are unrelated (AWS "internet
+    gateway", the kubeadm bootstrap token). The previous wording here ("squarely a Phase 6/Phase 7
+    concern... recommend scheduling it explicitly when those phases start") was itself
+    speculative and is corrected now: Phase 6 does not touch this at all, and Phase 7's Task 33
+    (`mcp-github` Kubernetes manifests) as currently written does **not** close it either — it
+    only sets `GITHUB_PERSONAL_ACCESS_TOKEN` as a container-level env var on the `mcp-github`
+    Deployment, which is a different thing from a per-request inbound `Authorization` header.
+  - **Re-verified live against the same image/version this finding originally used**
+    (`ghcr.io/github/github-mcp-server:latest`, `v1.8.0`, digest
+    `sha256:d5a18c04b92714c309eb46a2305087e91a4dbd80420f6e462656699f95093520`): started the
+    container in HTTP mode (`http --port 8100 --listen-host 0.0.0.0`) with
+    `GITHUB_PERSONAL_ACCESS_TOKEN` set in the container's own environment (never printed/logged/
+    committed — sourced from `gh auth token`, referenced by env var name only). A request with no
+    `Authorization` header still returns `401 Unauthorized`
+    (`WWW-Authenticate: Bearer resource_metadata="http://.../.well-known/oauth-protected-resource/mcp"`);
+    the identical request with a valid `Authorization: Bearer <token>` header succeeds
+    (`initialize` + `tools/list` returns 44 tools). Corroborated by `--help` on both subcommands:
+    `http`'s only auth-related flags are OAuth-resource-metadata flags (`--base-url`,
+    `--base-path`, `--scope-challenge`) — no token/PAT flag exists for HTTP mode at all — while
+    `stdio`'s flags (`--app-id`, `--app-private-key-path`, `--oauth-client-id`) are for local
+    single-process auth instead. Per the server's own OAuth-protected-resource design, HTTP mode's
+    env var supplies no inbound-auth exemption; since the unauthenticated call never got past the
+    handshake, no further "does the env var's identity actually work outbound" call was needed to
+    settle the question.
+  - **Conclusion: the env var is not sufficient — a per-request bearer header is still required.**
+    A token-injecting sidecar/gateway in front of `mcp-github` (or a deliberate revision of
+    design.md §9's "Neither reaches `api` or `frontend`" boundary if token custody is to be
+    extended) is genuinely needed to close this gap. **Explicitly unscheduled** — not assigned to
+    Phase 6, Phase 7, or any other phase; whoever picks this up should schedule it deliberately
+    when it's actually designed, not assume an existing phase's plan text already covers it.
+  - Until fixed: `POST /api/analyses/{id}/github-issue` (Task 22), `request_validator`
+    (Task 11), and `requirement_retriever`'s comments fetch (Task 11) will all 401 against a real
+    `mcp-github` deployment, though none of this is visible from any current test suite, all of
+    which pass cleanly by design (mocked transport boundary).
 
 - **RESOLVED: `@types/react`/`@types/react-dom` added, user-approved, see the Phase 5 entry
   above for full detail.** Was: `frontend/package.json` had no `@types/react`/`@types/react-dom`
