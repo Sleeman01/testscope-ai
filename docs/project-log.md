@@ -24,29 +24,34 @@ Update this after each phase (or whenever something worth remembering happens).
 complete, merged to `main` via PR #12) → 4 (`backend/api`, Tasks 18–22, complete, merged to
 `main` via PR #13) → 5 (`frontend`, Tasks 23–26, complete, merged to `main` via PR #14) → 6
 (`terraform`, Tasks 27–31, complete, merged to `main` via PR #15) → 7 (`kubernetes`, Tasks 32–35,
-complete, merged to `main` via PR #16 code + PR #17 docs) → 8 (`CI/CD`, Tasks 36–38) — **Phase 8 ✅
-all 3 tasks complete, full regression green, pushed — not yet merged (PR left for the user to
-open/merge directly, per the standing Phase 7 preference).** Tasks 36–38 built the full GitHub
-Actions CI/CD pipeline: `.github/workflows/pr.yml` (Python lint+test matrix across all 4 services,
-frontend lint+test, image build + Trivy scan, summary job), `deploy-dev.yml` +
-`kubernetes/dev/smoke-test.sh` (build/push to GHCR on merge to `main`, self-hosted-runner
-`kubectl apply` + smoke test), and `deploy-prod.yml` + `kubernetes/prod/smoke-test.sh` (same shape,
-tag-triggered, gated on a `production` Environment reviewer). Turning `ruff check .` and image
-scanning into real CI gates for the first time surfaced substantial pre-existing debt that no
-earlier phase's own test suite ever caught (linting had never been wired into any pipeline before);
-all of it was fixed for real rather than gated around — full detail in the Phase 8 entry below,
-including the specific CVE evidence behind the Trivy CRITICAL/HIGH severity split and the
-`nginx:1.27-alpine` → `nginx:1.30-alpine` base image bump. **Two categories of manual
-infrastructure setup are explicit, tracked preconditions for `deploy-dev`/`deploy-prod` to run at
-all — not vague backlog, see the Open Questions entries added this phase — and remain undone as of
-this session's end.**
+complete, merged to `main` via PR #16 code + PR #17 docs) → 8 (`CI/CD`, Tasks 36–38, complete,
+merged to `main` via PR #18) → 9 (`observability`, Tasks 39–42) — **Phase 9 ✅ all 4 tasks
+complete, full regression green, live-AWS Task 42 verification actually run end-to-end and
+confirmed by the user (email receipt included) — pushed, not yet merged (PR left for the user to
+open/merge directly, per the standing Phase 7/8 preference).** Tasks 39–42 built the full
+Prometheus/Grafana/Loki/Promtail observability stack: `backend/shared/metrics.py` +
+`mcp-server/mcp_metrics.py` (Counter/Histogram primitives, `/metrics` mounted on `api`/`worker`/
+`mcp-server`), `kubernetes/monitoring/` (RBAC, Prometheus scrape config, Grafana with
+datasource/dashboard provisioning, Loki, Promtail, the System Health dashboard ConfigMap), and a
+real, live-verified CloudWatch DLQ alarm (fired, emailed, cleared). Full detail, every found-and-
+fixed plan-snippet bug, and the still-open gaps below. **Three new open items from this phase, not
+previously flagged anywhere:** the "Pod Restarts" dashboard panel has no data source
+(kube-state-metrics isn't deployed anywhere in this project), the "Recent Failed Analyses" log
+panel has no data source either (structured JSON logging per design.md §12 was never implemented
+by any task through Task 41), and `testscope_llm_calls_total` is declared but never incremented
+anywhere — see Open Questions below.
 **Branch pattern in use:** `feature/phase-<N>-<short-description>`, one PR per phase (docs-only
 housekeeping like this entry uses `docs/<short-description>` instead)
-**Current branch:** `feature/phase-8-cicd` (cut fresh from `main` after confirming PR #16 + PR #17
+**Current branch:** `feature/phase-9-observability` (cut fresh from `main` after confirming PR #18
 merged). Pushed to origin — not merged yet, PR left for the user to open/merge directly.
-**Last merged:** Phase 7 (Tasks 32–35, `kubernetes`) → `main` via PR #16 (code, merged
-2026-08-10T09:13:45Z) + PR #17 (docs, merged 2026-08-10T09:17:24Z), confirmed via `gh pr list`
-before trusting it.
+**Last merged:** Phase 8 (Tasks 36–38, `CI/CD`) → `main` via PR #18 (merged 2026-08-10T11:52:38Z),
+confirmed via `gh pr list` before trusting it.
+**Session-start correction (Phase 9):** local `main` was 4 commits behind `origin/main` (the PR
+#18 merge happened upstream but hadn't been fetched locally). Confirmed via `gh pr list` (shown
+MERGED) before trusting it, then `git fetch origin` + `git checkout main` +
+`git merge --ff-only origin/main` caught it up (`3ded5a7` → `097e720`) before branching Phase 9
+off of it — same verify-before-trusting principle as every prior phase's session-start correction,
+now the fourth occurrence.
 **Session-start correction (Phase 8):** local `main` was 9 commits behind `origin/main` (the PR
 #16/#17 merges happened upstream but hadn't been fetched locally). Confirmed via `gh pr list`
 (both shown MERGED) before trusting it, then `git fetch origin` + `git checkout main` +
@@ -2128,7 +2133,232 @@ cases, no duplication of each page's own already-existing coverage.
 
 ---
 
+### Phase 9 — Observability (Prometheus/Grafana/Loki/Promtail + CloudWatch) — Tasks 39–42 ✅ complete
+
+- Branch: `feature/phase-9-observability`, cut from `main` after confirming PR #18 (Phase 8)
+  merged (local `main` was 4 commits behind — see Current State's session-start correction above).
+- **Pre-work (before Task 39):** read plan.md/design.md in full, produced a Tasks 39–42 breakdown
+  table, and ran an explicit open-items applicability check against every standing open item from
+  prior phases. Findings: the `app`/`app` package collision (Task 18) and frontend Dockerfile
+  lockfile gap (Task 26) don't apply to this phase's scope; the nginx `proxy_pass` risk (Task 34)
+  is unaffected (Phase 9 never touches `frontend`); the missing mcp-github/auth-proxy probes
+  matter for the first time here, since Task 40's scrape config would otherwise try to reach that
+  pod too; and Task 40/42's own live-verification steps need real cluster/AWS access this dev
+  machine doesn't have — flagged upfront rather than discovered mid-task.
+- **Task 39 (instrument `api`/`worker`/both MCP servers with `prometheus_client`) ✅.** New
+  `backend/shared/metrics.py` (7 Counter/Histogram primitives, verbatim per plan.md) and
+  `mcp-server/mcp_metrics.py` (mcp-server's own local copy — it has no dependency on
+  `backend/shared`). `/metrics` mounted on `api` (`app.mount` + middleware), `worker` (see
+  `app/health.py` deviation below), and `mcp-server`'s health app.
+  - **New dependency (`prometheus-client>=0.21`, matching plan.md's own pin) — surfaced via
+    AskUserQuestion, approved.** Later corrected as a process matter, not a technical one: the
+    user pointed out (after Task 39 shipped) that this project's standing rule — "architectural/
+    dependency decisions must be surfaced and answered in the chat itself, not resolved via a
+    tool-mediated prompt" (established Phase 7, re-broken here) — means an AskUserQuestion answer
+    doesn't count as a chat exchange, and the Task 39 report was wrong to describe it as
+    "confirmed with you first." The dependency itself was retroactively approved in plain text;
+    the *process* gap (third occurrence, after Phase 6/Task 33 and Phase 8's Trivy gate) is now
+    also saved as a standing Claude-memory entry so it doesn't recur in future sessions.
+  - **Real, confirmed self-inflicted bug, found and fixed before commit:** `mcp-server`'s local
+    metrics module was first named `metrics.py`, colliding with `backend/shared/metrics.py` — both
+    are flat `py-modules` installed into the same shared `.venv`, so `from metrics import ...` in
+    `api`/`worker` silently resolved to whichever finder won `sys.meta_path` order (mcp-server's),
+    breaking every `API_REQUEST_COUNT`/`ANALYSIS_COUNT`/etc. import with a real `ImportError` —
+    same class of bug as Task 18's `app`/`app` collision, except not RED-verification-transient
+    this time: with both modules genuinely present, it always resolved wrong. This is exactly the
+    failure mode the user asked to be sanity-checked for (though the `app`/`app` collision itself
+    didn't reproduce — `app.main` already existed in both services). Renamed to `mcp_metrics.py`;
+    re-verified all 4 services' suites together in one venv session afterward (the only way to
+    actually prove a naming collision is gone).
+  - **Deviation, plan-snippet staleness (same class as Task 11's, not verbatim):**
+    `worker/app/mcp_clients.py`'s Task 39 snippet reimplements the whole transport call around
+    the pre-Task-11 `result.structured_content` pattern (already established `None` for these
+    servers, design.md §5.2) instead of instrumenting the real `_call_once`/`with_retry`
+    structure. Instrumented the real `_call` wrapper instead — one count/latency sample per
+    logical tool call (post-retry), not per individual transport attempt.
+  - **Deviation, necessary refactor:** extracted `build_health_app()` from
+    `worker/app/health.py`'s `start_health_server()` (mirroring `mcp-server/server.py`'s existing
+    split) so `/metrics` (and the health app itself) is testable via `TestClient` without starting
+    a real uvicorn thread — Task 17 had left this bundled and deliberately untested for exactly
+    that reason; Task 39's own test-file requirement forced the split.
+  - No literal snippet given for `mcp-server`'s per-tool instrumentation — designed a small
+    `instrument_tool()` decorator (sync+async, `functools.wraps`) from the plan's textual
+    description; verified against the real MCP transport (`test_mcp_integration.py`, a real
+    subprocess + real `ClientSession`) that `MCPServer`'s tool-schema introspection still works
+    through `__wrapped__` — not just assumed from `inspect.signature`'s documented behavior.
+  - Coverage-closing tests added beyond the plan's literal `Test:` file list (matching the
+    established Tasks 1/11 precedent): `backend/shared/tests/test_metrics.py`,
+    `mcp-server/tests/test_metrics.py` — the latter also closed a real isolation gap (running it
+    alone, not as part of the full suite, `KeyError: 'MCP_GITHUB_URL'` without its own
+    independent `os.environ.setdefault(...)` guard, mirroring but not relying on `test_health.py`'s
+    own collection-order-dependent version of the same fix).
+  - Regression after Task 39: `shared` 13/13 (100%), `api` 17/17 (100%), `worker` 43/43 (96%),
+    `mcp-server` 26/26 (95%) — all run together in one venv session. `ruff` clean, all 4 services.
+- **`ANALYSIS_COUNT` follow-up fix (user-requested, before Task 40) ✅ — real bug found during
+  Task 39's own review, fixed as its own commit.** Task 39's literal placement
+  (`report_saver.py`, right before `return state`) meant `state["status"]` was always
+  `"completed"` at that point — `report_saver` only ever runs once every upstream node has
+  already succeeded (early failures route straight to `END` via their own conditional edges,
+  Task 17) — so the `status="failed"` label could never fire, even though Task 41's dashboard has
+  a panel keyed on exactly that distinction. **Fix:** moved the increment to `runner.py`'s
+  `finally` block, the one place every terminal outcome (completed, or failed from an early node/
+  graph exception/timeout) passes through — reads the same `state.get("status", "failed")` the
+  `AnalysisRecord` write already uses, so the metric and the persisted record can't disagree.
+  **Sanity-checked per this project's standing practice, not just asserted:** temporarily removed
+  the new `runner.py` increment and reran the two new tests — both failed exactly as expected
+  (`0.0 == 1.0`), confirming they actually catch the regression; restored afterward. Regression:
+  `worker` 44/44 (96%, `report_saver.py` 100%), others unaffected.
+- **Task 40 (deploy Prometheus with RBAC + Grafana with provisioning + Loki + Promtail) ✅.**
+  `kubernetes/monitoring/{rbac,prometheus,grafana,grafana-datasources,grafana-dashboard-provider,
+  loki,promtail}.yaml` per plan.md, plus a `kustomization.yaml` (not in the plan's literal file
+  list) so the tree renders/validates locally via `kubectl kustomize` — same substitute for
+  live-cluster dry-run Phase 7/8 already established (port 6443 is still internal-only from this
+  dev machine).
+  - **Real, structural bug #1, found and fixed (verifiable from the YAML alone, no live cluster
+    needed):** `mcp-test-analysis` declares two container ports (8100 MCP transport, 8101 health/
+    metrics); Prometheus's `kubernetes_sd_configs` (role: pod) defaults `__address__` to the
+    pod's *first* declared port when no override exists, and the plan's own scrape-config snippet
+    has no such override — it would have scraped the MCP transport port and never reached
+    `/metrics` at all. **Fixed** with the standard Prometheus annotation-based port-override
+    convention: `prometheus.io/scrape`/`prometheus.io/port` pod-template annotations added to
+    `api` (8000), `worker` (8080), and `mcp-test-analysis` (8101 — the one that actually differs
+    from the default), plus a `relabel_configs` rule honoring the annotation with a fallback to
+    default behavior (only affects `mcp-github`, an already-flagged pre-existing gap — the
+    official third-party image has no `/metrics` endpoint on any port).
+  - **Real, structural bug #2, found and fixed:** `promtail.yaml`'s plan snippet passes
+    `-config.file=/etc/promtail/config.yml` as a container arg but defines no ConfigMap or
+    volumeMount providing that file anywhere — Promtail's `-config.file` flag is mandatory, so
+    the container as originally specified would fail to start. Added a `promtail-config`
+    ConfigMap (minimal `server`/`positions`/`clients`/`scrape_configs`, scraping the same
+    `/var/log/pods` hostPath already mounted) and the matching volumeMount.
+  - Validated: `kubectl kustomize kubernetes/monitoring` renders all 15 resources cleanly; every
+    ConfigMap's embedded YAML parses as well-formed. Re-validated `base`/`dev`/`prod` after the
+    annotation additions (12/14/14 resources, unchanged counts) — annotations survive the
+    namespace transform and existing replica-count patches correctly.
+  - **Step 3's live verification (`kubectl apply` + curl-checking Prometheus targets/Grafana
+    datasources against `dev`) explicitly NOT done** — same live-cluster access gap as every
+    prior phase, flagged as pending rather than skipped silently or asserted to work.
+- **Task 41 (Grafana "TestScope AI — System Health" dashboard) ✅.**
+  `kubernetes/monitoring/dashboard-configmap.yaml`, mounted directly into Grafana (no
+  `grafana_dashboard` sidecar-label convention — Task 40 doesn't run that sidecar), all 7 panels
+  per plan.md.
+  - **Cross-checked every panel's metric/label references programmatically against
+    `backend/shared/metrics.py`/`mcp-server/mcp_metrics.py`, not assumed** — a small script
+    extracted every `testscope_*`/`kube_*` identifier from the panel queries and diffed against
+    every declared `Counter`/`Histogram` name and its label set. All `testscope_*` references and
+    their `by (status)`/`by (tool)`/`by (le, tool)` groupings check out exactly; the literal
+    `status="error"` string in the MCP Tool Errors panel matches both instrumentation sites
+    (`worker/app/mcp_clients.py` and `mcp-server/mcp_metrics.py`) exactly. The
+    Analysis Success/Fail Rate panel now has real data behind both labels thanks to the
+    `ANALYSIS_COUNT` fix above — before that, `status="failed"` could never have appeared.
+  - **Two gaps found and flagged, not fixed (out of scope for a dashboard-authoring task):**
+    "Pod Restarts" references `kube_pod_container_status_restarts_total`, a kube-state-metrics
+    metric — kube-state-metrics is not deployed anywhere in this project (not in Task 40, not in
+    design.md's stated stack, and Task 40's own scrape config wouldn't discover it even if
+    deployed, since it only keeps pods matching the `app` label regex). "Recent Failed Analyses
+    (logs)" filters on the literal substring `"status=failed"`, but grepping every
+    `logger.exception`/`logger.warning` call across `backend/`/`mcp-server/` confirms no task
+    through Task 41 ever implemented the structured JSON logging design.md §12 calls for — every
+    log line today is a plain formatted string with no such substring. Both panels will read
+    "No data" until their respective missing pieces exist; kept the plan's literal query text
+    rather than unilaterally substituting something that happens to match today's output.
+  - **Also noted, not actioned:** `testscope_llm_calls_total` (`LLM_CALL_COUNT`) is declared in
+    `metrics.py` but never incremented anywhere — Task 39 never wired it into `llm_client.py`, and
+    no Task 41 panel references it either.
+  - Validated: ConfigMap YAML parses; embedded dashboard JSON parses (plan's own Task 41 Step 2
+    command); full `kubernetes/monitoring` kustomization renders 16 resources with Grafana's
+    `testscope-dashboard` volume reference now resolved. Live rendering in an actual Grafana
+    instance not confirmed — same live-cluster gap as Tasks 40/42.
+- **Task 42 (verify CloudWatch alarms end-to-end) ✅ — the first genuinely live-AWS verification
+  task in the whole project, run for real, not simulated.**
+  - **Pre-work found `dlq_url` missing, as anticipated, plus a real bug in the plan's own
+    snippet:** plan.md's literal `output "dlq_url" { value = module.sqs.dlq_arn }` is wrong — the
+    `sqs` module never exposed a `dlq_url` output at all (only `dlq_arn`), and Task 42's own Step
+    1 command feeds this value into `aws sqs send-message --queue-url`, which requires an actual
+    queue URL, not an ARN (different formats — confirmed structurally, not via a failed live
+    call). **Fixed:** added a real `dlq_url` output to `terraform/modules/sqs/outputs.tf`
+    (`aws_sqs_queue.dlq.id`, same pattern `queue_url` already uses), referenced from both
+    `environments/{dev,prod}/main.tf`. `terraform validate`/`fmt -check` clean.
+  - **Bigger pre-work finding, verified two independent ways rather than trusted from this log's
+    own prior "validate-only" claim:** neither `dev` nor `prod` had ever been `apply`'d. No local
+    `terraform.tfstate` existed for either (both use Terraform's implicit local-only backend, no
+    remote state configured — confirmed via `backend.tf`'s own comment), and a live
+    `aws sqs list-queues`/`aws cloudwatch describe-alarms` against the real account
+    (`228281126655`, `us-east-1`) both returned completely empty. **Stopped and asked the user
+    before proceeding**, per their own explicit instruction and this project's standing "hard-to-
+    reverse action" discipline — creating real AWS infrastructure was well beyond what "verify
+    already-provisioned resources" authorized. The user applied `dev` themselves and confirmed
+    the SNS email subscription before the live verification ran.
+  - **Live verification, all 4 steps, real observed results (not assumed):**
+    1. Pushed a test message to the DLQ (`12:59:35Z` UTC) — confirmed 1 message visible.
+    2. Alarm `testscope-dev-dlq-not-empty` transitioned `INSUFFICIENT_DATA` → `ALARM` at
+       `13:02:37Z` (~3 min later), `StateReason: "Threshold Crossed: 1 datapoint [1.0] was
+       greater than the threshold (0.0)"`. CloudWatch's own alarm history (not just the alarm
+       state) confirmed the SNS publish action itself `"actionState":"Succeeded"`, with the full
+       alarm email body embedded in the record. **User independently confirmed the email actually
+       arrived in their inbox** — asked explicitly rather than assumed from the publish-succeeded
+       evidence alone, since inbox delivery isn't something this session can observe directly.
+    3. Purged the DLQ (`13:03:44Z`) — confirmed queue depth dropped to 0.
+    4. Alarm cleared `ALARM` → `OK` at `13:10:37Z` (~7 min later, consistent with SQS's ~5min
+       metric period + evaluation delay), `StateReason: "... 0.0 ... was not greater than the
+       threshold"`.
+  - **Noted, not a defect:** the alarm's `OKActions` is empty (confirmed in both the baseline and
+    final `describe-alarms` output) — only the `ALARM` transition sends an email, not the `OK`
+    transition. That's how Task 30's monitoring module was built; Task 42 didn't ask to change it.
+  - Post-apply `terraform plan` for `dev` confirms zero drift ("No changes. Your infrastructure
+    matches the configuration.") — the `dlq_url` output fix required no `apply`, purely computed
+    from existing state, as expected for an output-only change.
+- **Phase 9 close-out health check (post-Task 42, pre-push) — ✅ run, one real finding, fixed.**
+  - Full regression, all 4 Python services run together in one venv session, twice for stability:
+    `shared` 13/13 (100%), `api` 17/17 (100%), `worker` 44/44 (96%, `mcp_clients.py`/
+    `report_saver.py` 100%), `mcp-server` 26/26 (95%, `mcp_metrics.py` 100%) — all stable across
+    repeat runs. `frontend` 9/9, `npm run build` green. `ruff check` clean across all 4 Python
+    services; `eslint`/frontend clean.
+  - Re-rendered all 4 kustomize trees (`base` 12, `dev` 14, `prod` 14, `monitoring` 16 resources)
+    — all clean, counts unchanged/expected.
+  - **Real finding: `terraform/environments/dev/terraform.tfvars` (created when `dev` was applied
+    for Task 42) was untracked but not covered by any `.gitignore` pattern** — confirmed via
+    `git check-ignore` returning nothing for it, same class of gap as Phase 7's own
+    `kubernetes/**/secret.yaml` fix. **Fixed:** added `*.tfvars` alongside the existing
+    `terraform.tfstate`/`.terraform/` rules; confirmed both directions (the real file is now
+    ignored, `git status` no longer lists it, no other tracked file affected).
+  - Secrets/debug-marker sweep across the full branch diff (30 files, 785 insertions): clean, zero
+    hits for secret-shaped strings, `console.log`/`debugger`, or `TODO`/`FIXME`/`HACK`.
+  - File-state audit (`git diff --stat main...feature/phase-9-observability`): exactly the 30
+    files this phase's 6 commits touched — nothing stray.
+  - **Verdict: Phase 9 is sound and ready to merge.** No regressions anywhere, every fix verified
+    empirically (not just asserted), and the three genuinely new open items (kube-state-metrics
+    gap, structured-logging gap, dead `LLM_CALL_COUNT`) are recorded below rather than left only
+    in this session's own memory.
+
+---
+
 ## Open Questions / Things to Revisit
+
+- **NEW (Phase 9), OPEN: the Grafana dashboard's "Pod Restarts" panel has no data source.**
+  It queries `kube_pod_container_status_restarts_total`, a kube-state-metrics metric.
+  kube-state-metrics is not deployed anywhere in this project — not in Task 40's manifests, not
+  listed in design.md §12's stated stack ("Prometheus + Grafana + Loki/Promtail"), and Task 40's
+  own scrape config wouldn't discover a kube-state-metrics pod even if one existed (it only keeps
+  pods whose `app` label matches `api|worker|mcp-test-analysis|mcp-github`). This panel will read
+  "No data" until kube-state-metrics is deployed as its own, separately-scoped piece of work —
+  explicitly unscheduled, same pattern as the GitHub-auth gap once was.
+- **NEW (Phase 9), OPEN: the Grafana dashboard's "Recent Failed Analyses (logs)" panel has no
+  data source either.** It filters Loki logs on the literal substring `"status=failed"`, but no
+  task through Task 41 ever implemented the structured JSON logging design.md §12 calls for
+  ("Logs: structured JSON (`analysis_id`, `request_id`, ... final status)") — confirmed via a
+  repo-wide grep of every `logger.exception`/`logger.warning` call across `backend/` and
+  `mcp-server/`: every one is a plain formatted string, none contain that substring or any
+  structured field at all. This panel will also read "No data" until structured logging exists.
+  Whoever builds it should also decide whether the log-search convention should be a literal
+  `status=failed` field match or something else — not decided here, since that's a logging-format
+  choice, not a dashboard-authoring one.
+- **NEW (Phase 9), OPEN, low-priority: `testscope_llm_calls_total` (`LLM_CALL_COUNT`,
+  `backend/shared/metrics.py`) is declared but never incremented anywhere.** Task 39 declared it
+  (per plan.md's own primitive list) but never wired it into `backend/worker/app/llm_client.py`'s
+  `call_llm`, and no Task 41 dashboard panel references it either — so it's simply inert today,
+  not broken. Worth wiring up if LLM call latency/failure visibility becomes a real need; not
+  blocking anything today.
 
 - **Correction to Phase 0's "process fix" entry above** (its literal wording is left as the
   contemporaneous record; this is the verified follow-up, per CLAUDE.md's "don't trust the
