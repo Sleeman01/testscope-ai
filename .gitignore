@@ -26,6 +26,7 @@ frontend/*.tsbuildinfo
 terraform.tfstate
 terraform.tfstate.backup
 .terraform/
+*.tfvars
 kubernetes/**/secret.yaml
 
 # Editor/OS
