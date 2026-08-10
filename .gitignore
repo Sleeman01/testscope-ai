@@ -26,6 +26,7 @@ frontend/*.tsbuildinfo
 terraform.tfstate
 terraform.tfstate.backup
 .terraform/
+kubernetes/**/secret.yaml
 
 # Editor/OS
 .DS_Store
