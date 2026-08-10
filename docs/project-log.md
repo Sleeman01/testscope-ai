@@ -37,12 +37,14 @@ minutes** — both nodes `Ready`, Calico/ingress-nginx (`hostNetwork` confirmed 
 `hostIP`/`podIP`)/metrics-server (`kubectl top nodes` functional) all verified, plus an external
 `curl` to the worker's public IP. Cluster is **currently live and billing**, will auto-stop at
 13:00 UTC (16:00 Jerusalem) if left running. Task 29 (`iam`/`s3`/`dynamodb`/`sqs` modules) ✅
-complete — validate-only per plan.md (no `apply`, no environment wiring yet), one recurring
-plan-bug class fixed (semicolon single-line blocks, now 3 for 3 in Phase 6). See the Phase 6
-Task 28/29 entries below for full detail. All three tasks on `feature/phase-6-terraform`, not
-yet pushed/merged. Pre-work re-verified the GitHub-auth follow-up empirically (env var alone is
-insufficient; see the Open Questions entry)
-before starting Task 27.**
+complete — validate-only. Task 30 (`monitoring` module + `dev`/`prod` environments) ✅ complete —
+also validate-only (confirmed against plan.md before starting; no second cluster risk since
+`dev`/`prod` don't touch `ec2`/`networking` at all). The recurring block-syntax bug is now 5 for
+5 across Tasks 27–30 wherever the plan condenses HCL onto single lines with `;`/`,` separators —
+`monitoring`'s multi-line blocks correctly did *not* have it, confirmed rather than assumed. See
+the Phase 6 Task 28–30 entries below for full detail. All four tasks on `feature/phase-6-terraform`,
+not yet pushed/merged. Pre-work re-verified the GitHub-auth follow-up empirically (env var alone
+is insufficient; see the Open Questions entry) before starting Task 27.**
 **Branch pattern in use:** `feature/phase-<N>-<short-description>`, one PR per phase (docs-only
 housekeeping like this entry uses `docs/<short-description>` instead)
 **Current branch:** `feature/phase-6-terraform` (cut fresh from `main` after confirming PR #14
@@ -1598,6 +1600,62 @@ cases, no duplication of each page's own already-existing coverage.
   change) rather than re-diagnosing this again in Task 30/31.
 - No credential/secret handling, no AWS resources created or touched (validate-only, no live AWS
   calls beyond provider-plugin download/registry lookups).
+
+### Task 30 (`monitoring` module + `dev`/`prod` environments) — ✅ complete, validate-only (no `apply` — plan doesn't call for one, confirmed before starting per the user's explicit ask)
+
+- Created `terraform/modules/monitoring/{main,variables}.tf` and
+  `terraform/environments/{dev,prod}/{main,variables,backend}.tf` per plan.md — this is the
+  first task wiring `networking`/`ec2`/`iam`/`s3`/`dynamodb`/`sqs`/`monitoring` together into
+  real environment roots, but doing so is still validate-only: Task 30's own Step 3 is
+  `terraform init -backend=false && terraform validate` for `dev`/`prod`, no `apply` anywhere in
+  this task's text. **Confirmed explicitly before starting, per the user's specific question:**
+  no real apply happens in Task 30, so there was no possibility of this creating a second live
+  cluster alongside Task 28's — `dev`/`prod` don't touch `ec2`/`networking` at all (they only
+  wire `s3`/`dynamodb`/`sqs`/`iam`/`monitoring`), and even those aren't applied here. (For
+  context, not part of this task: the Task 28 cluster was still `running`, not yet auto-stopped,
+  as of this task's start — unrelated to Task 30's own scope.)
+- **Plan-snippet bugs found: exactly the two predicted, both confirmed empirically via
+  `terraform validate`/`init` against the literal snippets first, not assumed from precedent
+  alone:**
+  1. `dev/variables.tf` (and identically `prod/variables.tf`, same snippet substituted verbatim):
+     `variable "aws_region" { type = string, default = "us-east-1" }` — the same
+     comma-separated single-line block bug as Task 27's `shared/variables.tf` and Task 28's
+     `ec2/variables.tf`. Fixed the same way, values unchanged.
+  2. `dev/main.tf`'s (and `prod/main.tf`'s) three `module` one-liners —
+     `module "s3" { source = "../../modules/s3"; env = "dev" }` (and identically for
+     `dynamodb`/`sqs`) — the same semicolon-separated single-line block bug as Task 27's
+     `ingress`/`egress` and Task 29's `attribute` blocks. `terraform init`/`validate` only
+     surfaced the first (`module "s3"`) explicitly before stopping enumeration in that file, but
+     since `dynamodb`/`sqs` are byte-identical in shape, fixed all three preemptively rather than
+     rediscovering the same bug twice more; re-validated clean afterward, confirming no further
+     surprises in that file. Fixed the same way — one argument per line, values unchanged.
+  - **Correctly predicted NOT to have the bug, and confirmed clean:** the `monitoring` module's
+    `aws_cloudwatch_metric_alarm` blocks are fully multi-line in the plan's own snippet (each
+    argument already on its own line, including `dimensions = { QueueName = "..." }`, which is a
+    single-key object-constructor value assignment — not block syntax, and not this bug class
+    regardless of key count). Validated clean on the first pass, no fix needed — checked
+    deliberately rather than assuming every block-shaped resource in this task would need the
+    same treatment, same discipline as Task 29's `iam` module finding.
+- **Plan-doc/code inconsistency, flagged rather than silently resolved or silently ignored:**
+  Task 30's own **Interfaces** text states `dev`/`prod` consume `worker_iam_role_arn`,
+  `control_plane_public_ip`, `worker_public_ip` "from `environments/shared` ... referenced via
+  `terraform_remote_state` data source" — and the `data "terraform_remote_state" "shared"` block
+  is indeed declared in both `main.tf` files. **But nothing in either file's actual code reads
+  `data.terraform_remote_state.shared.outputs.*` anywhere** — `module "iam"`'s
+  `instance_role_name` is a hardcoded literal `"testscope-k8s-worker-role"` instead, and
+  `control_plane_public_ip`/`worker_public_ip` aren't referenced at all in this task's code.
+  Not fixed: the hardcoded string happens to be correct (it's exactly what Task 28's `ec2` module
+  names the role), so nothing is functionally broken and `terraform validate` raises no complaint
+  about the unused data source — but the Interfaces text and the actual code disagree about
+  *how* that value gets there. Left as a documentation/code mismatch to be aware of, not silently
+  smoothed over by rewriting the code to match the prose (that would be more than the minimal fix
+  this task's own validate step calls for) or by editing the prose (out of scope for implementing
+  a task, not documenting one).
+- **Validation:** `terraform init -backend=false && terraform validate` — `Success!` for
+  `monitoring`, `dev`, and `prod` (the latter two carry the same 4 non-blocking `dynamodb`
+  `hash_key`/`range_key` deprecation warnings already noted in Task 29, nothing new). Each
+  directory's own `.terraform.lock.hcl` committed per established precedent.
+- No credential/secret handling, no AWS resources created or touched.
 
 ---
 
