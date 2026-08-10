@@ -1,5 +1,7 @@
 import logging
 
+from metrics import ANALYSIS_COUNT
+
 from app.mcp_clients import call_test_mcp_tool
 
 logger = logging.getLogger(__name__)
@@ -19,4 +21,5 @@ async def report_saver(state: dict) -> dict:
         logger.exception("save_coverage_report failed for analysis_id=%s", state["analysis_id"])
         state["storage_status"] = "failed"
         state.setdefault("warnings", []).append(f"Report save failed: {exc}")
+    ANALYSIS_COUNT.labels(status=state["status"]).inc()
     return state
