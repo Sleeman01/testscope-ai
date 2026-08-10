@@ -23,32 +23,43 @@ Update this after each phase (or whenever something worth remembering happens).
 (`backend/shared`, Task 9, complete, merged to `main`) → 3 (`backend/worker`, Tasks 10–17,
 complete, merged to `main` via PR #12) → 4 (`backend/api`, Tasks 18–22, complete, merged to
 `main` via PR #13) → 5 (`frontend`, Tasks 23–26, complete, merged to `main` via PR #14) → 6
-(`terraform`, Tasks 27–31) — **Phase 6 ✅ all 5 tasks complete.** Task 27 (`networking` +
-`shared` scaffolding) and Task 28 (`ec2` module) both real, applied, verified infrastructure —
-Task 28's cluster took 3 apply attempts (account guardrail Lambda auto-stop, then a real
-missing-kubeadm-prerequisites bug, both found and fixed live) before converging in ~3.5 minutes
-and passing every one of the plan's Step 5 checks plus an external `curl`. Tasks 29–31
-(`iam`/`s3`/`dynamodb`/`sqs`, `monitoring`+`dev`/`prod`, validation+cleanup) are all
-validate-only per the plan's own text, confirmed before starting each time — no `dev`/`prod`/
-`monitoring` AWS resources have ever been applied. The same recurring HCL block-syntax bug
-(plan snippets condensing multi-argument blocks onto one `;`/`,`-separated line) appeared 5
-times across Tasks 27–30 and was fixed identically each time; `monitoring`'s multi-line blocks
-correctly did *not* have it. Task 31 also resolved all 4 items flagged along the way: pinned
-`aws` to `~> 6.58` in all three environment roots (user-approved), ran `terraform fmt -recursive`
-across the whole tree (8 files, cosmetic only), decided to document (not fix) `dynamodb`'s 4
-deprecation warnings, and resolved the `terraform_remote_state` doc/code mismatch by correcting
-`design.md` §9 rather than the code (user-approved — `dev`/`prod` stay decoupled from `shared`'s
-state by design). **The Task 28 cluster is still `running` and billing as of this entry** — see
-the Phase 6 Task 31 entry's closing summary below for the full list of what's still open before
-Phase 7. All five tasks on `feature/phase-6-terraform`, not yet pushed/merged. Pre-work
-re-verified the GitHub-auth follow-up empirically (env var alone is insufficient, still
-unscheduled to any phase; see the Open Questions entry) before starting Task 27.**
+(`terraform`, Tasks 27–31, complete, merged to `main` via PR #15) → 7 (`kubernetes`, Tasks 32–35)
+— **Phase 7 ✅ all 4 tasks complete, health-checked, pushed — not yet merged (PR to be opened by
+the user on GitHub directly, per explicit instruction this phase, not by Claude).** Tasks 32–35
+built the full `kubernetes/base` manifest set (`api`, `worker`, `mcp-test-analysis`, `mcp-github`,
+`frontend`, shared `ConfigMap`, `Ingress`) plus `dev`/`prod` kustomize overlays and a `monitoring`
+namespace placeholder. Task 33 closed the previously-unscheduled GitHub-auth gap (see the Open
+Questions entry below) via an explicit, user-directed architectural decision: an `nginx` sidecar
+in the `mcp-github` pod that injects the `Authorization: Bearer` header `github-mcp-server`'s
+HTTP mode requires, from the same `github-token` Secret — `worker`/`api`/`mcp-test-analysis` stay
+token-free. Real bugs found and fixed along the way: `mcp-github`'s own container was missing the
+`http --port ... --listen-host ...` args (would have crash-looped, same class of issue as Task 8's
+original Docker-invocation finding); `mcp-server`'s flat-layout packaging bug (same class as
+Task 10's `backend/shared` fix, latent since Phase 1, surfaced by reinstalling for the new
+`fastapi`/`uvicorn` dependency); a health-check-thread startup-ordering race that intermittently
+starved `test_mcp_integration.py`'s `sleep(8.0)` budget under full-suite+coverage runs (fixed by
+sequencing, not by touching the sleep constant — verified 6/6 clean afterward); and a `.gitignore`
+gap where `secret.yaml.example`'s own comment claimed a copied `secret.yaml` was gitignored but no
+pattern actually covered it (found in the Phase 7 health check, fixed, repo-wide sweep found
+nothing else). One `fastapi`/`uvicorn` dependency addition to `mcp-server` was explicitly
+surfaced and approved in-chat before being applied (matching existing `backend/api`/
+`backend/worker` pins, no new version introduced). Every task's validation used the same
+substitute (`kubectl kustomize` render + YAML-parse) instead of `kubectl apply --dry-run=client`,
+which cannot reach a live API server from this dev machine — confirmed to be a real environment
+gap (API discovery requires a reachable server even for client-side dry-run; the cluster's 6443
+is intentionally internal-only per design.md §9) — deferred to Phase 8, not resolved. Full detail
+in the Phase 7 and Phase 7 health check entries below.
 **Branch pattern in use:** `feature/phase-<N>-<short-description>`, one PR per phase (docs-only
 housekeeping like this entry uses `docs/<short-description>` instead)
-**Current branch:** `feature/phase-6-terraform` (cut fresh from `main` after confirming PR #14
-merged; local `main` was stale again by 14 commits — see the Phase 6 pre-work entry below, same
-class of issue as every prior phase's session-start correction).
-**Last merged:** Phase 5 (Tasks 23–26, `frontend`) → `main` via PR #14 (2026-08-09T19:59:40Z).
+**Current branch:** `feature/phase-7-k8s-manifests` (cut fresh from `main` after confirming PR #15
+merged — this time local `main` was already in sync with `origin/main`, the first phase where the
+session-start staleness correction wasn't needed). Pushed to origin, confirmed tip SHA matches
+(`92f30b5`, 0 ahead/0 behind) — not merged yet, PR left for the user to open/merge directly.
+**Last merged:** Phase 6 (Tasks 27–31, `terraform`) → `main` via PR #15 (2026-08-10T07:49:59Z).
+Phase 6 had never been pushed/merged as of its own session's final report — corrected at the start
+of the Phase 7 pre-work session (pushed, PR #15 opened and merged, confirmed via `gh pr list`)
+before cutting Phase 7's branch, same verify-before-trusting principle as every prior phase's
+session-start correction.
 **Session-start correction:** local `main` was behind `origin/main` by 13 commits (the PR #13
 merge happened upstream but hadn't been fetched locally). Confirmed via `gh pr list` (PR #13
 shown MERGED) before trusting it, then `git fetch origin` + `git checkout main` +
@@ -122,6 +133,13 @@ same substitute-tool-table treatment from scratch — it doesn't inherit Task 11
 - Course requirement: `docs/spec.md`/`docs/plan.md` were renamed to the Superpowers dated
   convention (`docs/2026-07-30-testscope-ai-design.md` / `-plan.md`) per instructor's
   explicit approval — documented in PR #2's description.
+- Architectural/dependency-version decisions must be surfaced and answered in the chat itself,
+  not resolved via a tool-mediated prompt — explicit as of Phase 7 (Tasks 34/35), after a Task 33
+  approval happened through a UI tool rather than a plain-text exchange. A report claiming
+  something was "approved"/"decided" must be traceable to an actual chat exchange.
+- PRs are opened/merged by the user directly on GitHub, not by Claude — explicit as of Phase 7
+  (contrast with Phase 6, where Claude ran `gh pr create` without it being flagged as wrong at the
+  time; treat "push only, no PR" as the default going forward unless told otherwise).
 
 ---
 
@@ -1770,6 +1788,177 @@ cases, no duplication of each page's own already-existing coverage.
   similarly condensed HCL or YAML (Kubernetes manifests, GitHub Actions YAML), and verify
   empirically the same way rather than assuming a fix is needed or not needed.
 
+### Phase 7 — Kubernetes Manifests (kubeadm cluster) — Tasks 32–35 ✅ complete
+
+- Branch: `feature/phase-7-k8s-manifests`, cut from `main` after pushing and merging Phase 6's
+  own branch first (it had never been pushed — see the Current State correction above), the only
+  phase so far where local `main` didn't also need a separate fast-forward at session start.
+- Pre-work (separate from Task 32 itself) answered five explicit applicability questions before
+  any code was written: confirmed Task 33's plan text has no token-injection design at all (only
+  a bare `GITHUB_PERSONAL_ACCESS_TOKEN` container env var); confirmed the `app`/`app` package
+  collision (Task 18) doesn't apply to Phase 7 (pure YAML, no Python installs); confirmed Phase 7
+  doesn't build/deploy any image for real (all validation is client-side `dry-run`/`kustomize`,
+  no `docker build`, no live apply — that's Phase 8); flagged that the session had started in Auto
+  Mode despite being asked to confirm manual mode, and treated the user's explicit instruction as
+  overriding the default for the rest of the project; and verified the Task 28 cluster
+  (`i-0887a982c0501958c` control-plane, `i-0606ccf79b1c0c1af` worker) live via `aws ec2
+  describe-instances` rather than trusting the log — both still `running` at pre-work time.
+- **Task 32 (base `api`/`worker` manifests) ✅**, implemented verbatim from plan.md, cross-checked
+  against design.md §10's resource/probe requirements — no mismatch. **Real environment gap found
+  running Step 4's literal validation command**, not a manifest bug: `kubectl apply
+  --dry-run=client -k kubernetes/base` timed out trying to fetch OpenAPI schema from a stale
+  control-plane IP (two different stale IPs across two kubeconfigs on this machine, neither
+  matching the cluster's actual current public IP) — client-side dry-run in this kubectl version
+  still needs live API discovery from a reachable server, which the plan's own "no live cluster
+  required" framing doesn't hold. Confirmed unfixable from this machine by design, not just
+  inconvenience: the cluster's port 6443 is intentionally security-group-restricted to
+  internal-only (design.md §9) — the only legitimate way to run the literal command is from
+  inside the VPC. Substituted `kubectl kustomize` (pure client-side render) + a YAML-parse check
+  for the rest of the phase; deferred the live-cluster gap to Phase 8 rather than opening up
+  network access to work around it. Committed as `fec3159`.
+- **Task 33 (`mcp-test-analysis`/`mcp-github` manifests + GitHub-auth sidecar) ✅ — the most
+  consequential task this phase.** The user made an explicit, pre-declared architectural decision
+  (not decided by Claude): close the GitHub-auth gap with an `nginx` sidecar in the `mcp-github`
+  pod that intercepts inbound traffic and injects `Authorization: Bearer <token>` (from the
+  existing `github-token` Secret) before proxying to the real `github-mcp-server` container, moved
+  to a `127.0.0.1`-only internal port. Gateway/ingress-level injection and an oauth2-proxy-style
+  reverse proxy were both explicitly considered and rejected by the user (routing coupling,
+  overkill for a single static PAT) before implementation started. `worker`/`api`/
+  `mcp-test-analysis` all stay token-free — confirmed by reading `mcp-server/github_client.py`
+  directly that `mcp-test-analysis` already sends its own valid bearer header on outbound calls to
+  `mcp-github` (holds its own token per design.md §5.1), and that the sidecar's unconditional
+  header injection is harmless/idempotent against that, not a conflict.
+  - **Implementation choice, distinct from the architecture itself, flagged not defaulted:** the
+    sidecar is `nginx:1.27-alpine` (the exact image/version already used in `frontend/Dockerfile`
+    — no new dependency-version decision) using the official image's built-in envsubst-on-templates
+    feature to inject the Secret-sourced token into the proxied request, rather than a custom-built
+    image.
+  - **Independent bug fixed in the same container, not part of the sidecar decision:** Task 33's
+    own `mcp-github` manifest snippet had no `args`/`command` at all — the bare entrypoint starts
+    an stdio server that exits immediately when run detached, the same class of bug Task 8 already
+    found and fixed for local Docker verification (design.md §5.2). Fixed via
+    `args: ["http", "--port", "8101", "--listen-host", "127.0.0.1"]`.
+  - **New dependency addition surfaced and approved in this chat before being applied, per the
+    user's explicit instruction not to decide dependency versions unilaterally:** `mcp-server`
+    needed `fastapi`/`uvicorn` added for its new `/health/live`/`/health/ready` endpoints (plan's
+    own Task 33 text). Recommended matching `backend/api`'s/`backend/worker`'s existing
+    `fastapi>=0.115`/`uvicorn[standard]>=0.32` pins (no new version anywhere in the repo);
+    user confirmed in-chat before it was added.
+  - **Real, pre-existing packaging bug found and fixed while reinstalling — same class as Task
+    10's `backend/shared` fix:** `mcp-server` had never been reinstalled since Phase 1, so its own
+    flat-layout module-discovery ambiguity (5 top-level `.py` files, no `[tool.setuptools]`
+    config) had never been triggered. Surfaced by adding the new dependency and running
+    `pip install -e ".[dev]"` for the first time in this phase. Fixed identically to Task 10:
+    `py-modules = ["aws", "github_client", "server", "sweeper", "workspace"]`.
+  - **Test-only gap found via the mandatory RED-verification step:** `test_health.py` is the first
+    test in this suite to import `server` directly at module scope — `server.py`'s module-level
+    `GithubClient()` needs `MCP_GITHUB_URL`/`GITHUB_TOKEN` set *before* import, which
+    `monkeypatch` (used everywhere else in this suite) can't do at collection time. Fixed with
+    `os.environ.setdefault(...)` (placeholder value only) scoped to just this test file.
+  - Full `mcp-server` suite after: 19/19 passing, 94–96% coverage depending on run (see the
+    flakiness note below), zero new `ruff` findings after cleaning up two unnecessary `noqa`
+    comments in the new test file. Repo-wide regression: `backend/worker` 38/38, `backend/api`
+    16/16, `backend/shared` 12/12 — unaffected. Committed as `6ce8d1e`.
+  - **Flakiness observed, not fixed in this task — fixed as its own follow-up before Task 34
+    (see below):** the new health-server thread's extra imports measurably added to `mcp-server`'s
+    real subprocess startup time; `test_mcp_integration.py`'s existing `sleep(8.0)` budget
+    occasionally wasn't enough under full-suite+coverage runs (~2 failures in 5 runs), though the
+    same test passed 5/5 in isolation. Not touched here since the "right" fix (sequencing vs.
+    bumping the sleep vs. reducing import cost) was the user's call, not a mechanical one.
+- **Task 33 follow-up fix (done first, before Task 34, per explicit instruction) ✅:** the health
+  thread now polls (cheap TCP-connect loop, no `fastapi`/`uvicorn` work) until the main MCP
+  transport is confirmed listening before calling `uvicorn.run(...)` — the costly part. `sleep(8.0)`
+  itself and import cost both left untouched, exactly as instructed; the fix is pure sequencing.
+  **Verified resolved, not just attempted: 6/6 clean full-suite+coverage runs afterward (0
+  failures, vs. 2/5 before), runtime also dropped from 17–29s to 13–14s per run**, consistent with
+  reduced startup contention rather than a coincidence. Committed separately as `cb4c75e` so it's
+  distinguishable from Task 33's own work.
+- **Task 34 (`frontend` manifests + `Ingress`) ✅**, implemented verbatim from plan.md — no
+  plan-text deviations. **Real bug found by actually building and running the Dockerfile (not
+  just written and trusted, matching Task 17/26 precedent):** `nginx`'s static
+  `proxy_pass http://api:8000;` resolves that hostname once at config-load time and refuses to
+  start at all if unresolvable then — confirmed directly, the container crash-looped in an
+  isolated `docker run` with no `api` host present (`nginx: [emerg] host not found in upstream
+  "api"`); re-verified clean with a fake `--add-host=api:127.0.0.1` entry (both `/` and a
+  client-side SPA route returned `200` via the `try_files` fallback, config content matched
+  exactly). **Not fixed** — in the real cluster this shouldn't bite under this project's
+  apply-the-whole-`kustomize`-`base`-together pattern (the `api` Service DNS entry exists as soon
+  as its Service object does, independent of pod readiness), but it is a real crash, not a
+  graceful per-request failure, if `frontend`'s pod is ever scheduled before `api`'s Service
+  object exists. The proper fix (`resolver` + variable-based `proxy_pass`, deferring DNS
+  resolution to request time) is a new nginx pattern beyond this task's literal scope and needs a
+  resolver-source decision — flagged for the user, not applied. Verification image/container
+  removed after confirming. Committed as `9b203df`.
+- **Task 35 (`dev`/`prod` kustomize overlays + `monitoring` namespace placeholder) ✅**,
+  implemented verbatim from plan.md — no deviations, no new bugs found. `SQS_QUEUE_URL` is left
+  as the plan's literal `PASTE_FROM_TERRAFORM_OUTPUT_queue_url` placeholder in both overlays
+  (correctly, not a gap): `dev`/`prod` Terraform environments have never actually been applied
+  (Phase 6 was validate-only by design), so no real queue URL exists anywhere to paste yet; the
+  plan's own snippet already anticipates this by using concrete deterministic names for
+  `DYNAMODB_TABLE`/`S3_BUCKET` (derivable from the env name alone) while leaving only the
+  apply-dependent `SQS_QUEUE_URL` as a placeholder. Validated both overlays render correctly
+  (14/14 resources each) and that patches actually take effect (`ENV`, table/bucket names,
+  `Ingress` host, replica counts all inspected field-by-field, not just "did it parse").
+  Committed as `c9a06ea`.
+
+### Phase 7 health check (post-Task 35, pre-push) — ✅ run, one real finding, fixed
+
+- **Repo-wide regression: all clean.** `backend/worker` 38/38, `backend/api` 16/16,
+  `backend/shared` 12/12, `mcp-server` 19/19 (3/3 repeated clean runs with coverage, re-confirming
+  the Task 33 follow-up fix still holds), `frontend` 9/9 (pre-existing React Router v7
+  future-flag warnings only, unrelated to this phase).
+- **Full manifest re-render, base + dev + prod together, patches re-verified not just
+  re-parsed:** `kubectl kustomize` on all three (12/14/14 resources respectively), plus a
+  targeted deep-check that Task 33's sidecar survives Task 35's namespace/patch machinery
+  correctly — it does: both `mcp-github` containers, the `auth-proxy` ConfigMap volume mount, and
+  the Service's port 8100 all render intact and correctly namespaced in both `dev` and `prod`
+  (kustomize's namespace transformer doesn't touch cross-resource name references here, since no
+  `configMapGenerator`/hash-suffixing is used anywhere in this tree). Also explicitly confirmed
+  `ingressClassName: nginx` from base survives the `dev`/`prod` `ingress-patch.yaml` strategic
+  merge in both overlays (a field a patch can silently drop if merge semantics are wrong — they
+  aren't here).
+- **Secrets sweep across the full phase (all 5 Task commits, 28 files): clean of any actual
+  token/credential-shaped strings.** But found one real, substantive gap:
+  `kubernetes/base/mcp-test-analysis/secret.yaml.example`'s own comment claims a copied
+  `secret.yaml` is gitignored — it wasn't; no `.gitignore` pattern actually covered it, confirmed
+  via `git check-ignore` returning nothing for that path. If the documented copy-and-fill-in
+  workflow were followed literally, a real GitHub PAT would have been committable. **Fixed as its
+  own follow-up (see below), not silently patched in the health check itself** — flagged to the
+  user first.
+- **Cross-task consistency: coheres correctly overall, one known tension restated (not new).**
+  Every consumer of the GitHub token — `mcp-test-analysis`'s container, `mcp-github`'s real
+  container, and the `auth-proxy` sidecar — references the same `secretKeyRef: {name:
+  github-token, key: token}`. Since Secrets are namespace-scoped by name, this means only *one*
+  underlying Secret object can exist per namespace, shared by all three, not "their own" instance
+  as design.md §5.1's language implies — already flagged during Task 33, restated here since
+  Task 35 doesn't resolve it either (no Secret object is created anywhere in this repo yet, only
+  the `.example` template — applying `dev`/`prod` as-is today would leave every pod needing this
+  Secret unable to start until someone creates it manually per namespace, which is expected/
+  intentional, just worth stating plainly as a Phase 8 precondition).
+- **Verdict: Phase 7 is sound.** No regressions, manifests structurally correct and consistent
+  end-to-end, no accidental secrets committed. The one real finding (`.gitignore` gap) was fixed
+  as an explicit, scoped follow-up, described next.
+
+### `.gitignore` fix (post-health-check, pre-push) — ✅ complete
+
+- Added `kubernetes/**/secret.yaml`. **Verified both directions, not just pattern-matched:**
+  copied `secret.yaml.example` to a real `secret.yaml`, confirmed `git check-ignore -v` matches it
+  and `git status` does *not* list it as untracked, then confirmed `secret.yaml.example` itself is
+  still *not* ignored (stays tracked) — removed the temporary copy afterward. Also confirmed the
+  glob covers any depth/service dir (`dev`, `prod`, `mcp-github`, etc.), not just the one path
+  that prompted the fix.
+- **Repo-wide sweep for the same convention gap, as explicitly asked, found nothing else.** The
+  `secret.yaml.example` file is the only `*.example` in the entire repo (`git ls-files` +
+  filesystem `find` agree). Broadened the search past filenames to a text grep for "copy to" /
+  "gitignored" / "never commit" / "REPLACE_WITH"-style comments across `.yaml`/`.yml`/`.tf`/
+  `.md`/`.tpl`/`.example` files: the only other "copy and fill in, expect gitignored" case in the
+  repo is Terraform's generated SSH private key
+  (`terraform/environments/shared/testscope-k8s-keypair.pem`) — checked against the real file,
+  which exists on disk right now (the live Phase 6 cluster's key), and confirmed it's already
+  correctly covered by the pre-existing `*.pem` rule and not tracked in git. `terraform/modules/
+  ec2/*.tpl` files are Terraform `templatefile()` inputs rendered by Terraform itself, a different
+  pattern entirely, not a gap. Committed as `92f30b5`.
+
 ---
 
 ## Open Questions / Things to Revisit
@@ -1849,6 +2038,21 @@ cases, no duplication of each page's own already-existing coverage.
     (Task 11), and `requirement_retriever`'s comments fetch (Task 11) will all 401 against a real
     `mcp-github` deployment, though none of this is visible from any current test suite, all of
     which pass cleanly by design (mocked transport boundary).
+  - **ADDRESSED (design-level) in Phase 7, Task 33 — not yet empirically re-verified against a
+    live cluster.** The user made an explicit architectural decision (sidecar, not gateway or
+    oauth2-proxy — see the Phase 7 entry above for the full rationale) and it's now implemented
+    and committed: an `nginx` sidecar in the `mcp-github` pod injects `Authorization: Bearer
+    <token>` on every request reaching the Service's port, from the same `github-token` Secret,
+    before proxying to the real `github-mcp-server` container. Since this sits in front of the
+    Service endpoint itself, it should transparently fix `POST /github-issue`, `request_validator`,
+    and `requirement_retriever` all at once, with zero changes needed to any of their own code —
+    none of them hold or send a token today, and none of them need to. **This is a design/code
+    claim, not a live-verified one**: Task 33's own validation was `kubectl kustomize` render +
+    YAML-parse only (the same live-cluster-access gap noted in every Phase 7 task — this dev
+    machine can't reach the cluster's intentionally internal-only port 6443). Closing this for
+    real requires an actual `apply` + a live `curl`/tool-call test against the deployed sidecar,
+    the same kind of empirical check Task 8 originally used to *find* this gap — deferred to
+    Phase 8, not assumed done.
 
 - **RESOLVED: `@types/react`/`@types/react-dom` added, user-approved, see the Phase 5 entry
   above for full detail.** Was: `frontend/package.json` had no `@types/react`/`@types/react-dom`
