@@ -10,3 +10,6 @@ resources:
   - mcp-github/deployment.yaml
   - mcp-github/service.yaml
   - mcp-github/auth-proxy-configmap.yaml
+  - frontend/deployment.yaml
+  - frontend/service.yaml
+  - ingress.yaml
