@@ -1,0 +1,9 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: testscope-config
+data:
+  ENV: "prod"
+  DYNAMODB_TABLE: "testscope-analyses-prod"
+  S3_BUCKET: "testscope-reports-prod"
+  SQS_QUEUE_URL: "PASTE_FROM_TERRAFORM_OUTPUT_queue_url"

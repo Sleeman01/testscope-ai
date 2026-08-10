@@ -1,0 +1,9 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: testscope-config
+data:
+  ENV: "dev"
+  DYNAMODB_TABLE: "testscope-analyses-dev"     # from `terraform output table_name` in environments/dev
+  S3_BUCKET: "testscope-reports-dev"           # from `terraform output bucket_name`
+  SQS_QUEUE_URL: "PASTE_FROM_TERRAFORM_OUTPUT_queue_url"
