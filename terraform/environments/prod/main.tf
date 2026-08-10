@@ -43,3 +43,5 @@ module "monitoring" {
 output "bucket_name" { value = module.s3.bucket_name }
 output "table_name" { value = module.dynamodb.table_name }
 output "queue_url" { value = module.sqs.queue_url }
+# Task 42: same dlq_url fix as environments/dev/main.tf -- see that file's comment.
+output "dlq_url" { value = module.sqs.dlq_url }
