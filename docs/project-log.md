@@ -36,9 +36,12 @@ destroyed the broken instances, re-applied. **Third apply attempt fully converge
 minutes** — both nodes `Ready`, Calico/ingress-nginx (`hostNetwork` confirmed via matching
 `hostIP`/`podIP`)/metrics-server (`kubectl top nodes` functional) all verified, plus an external
 `curl` to the worker's public IP. Cluster is **currently live and billing**, will auto-stop at
-13:00 UTC (16:00 Jerusalem) if left running. See the Phase 6 Task 28 entry below for full detail.
-Both tasks on `feature/phase-6-terraform`, not yet pushed/merged. Pre-work re-verified the
-GitHub-auth follow-up empirically (env var alone is insufficient; see the Open Questions entry)
+13:00 UTC (16:00 Jerusalem) if left running. Task 29 (`iam`/`s3`/`dynamodb`/`sqs` modules) ✅
+complete — validate-only per plan.md (no `apply`, no environment wiring yet), one recurring
+plan-bug class fixed (semicolon single-line blocks, now 3 for 3 in Phase 6). See the Phase 6
+Task 28/29 entries below for full detail. All three tasks on `feature/phase-6-terraform`, not
+yet pushed/merged. Pre-work re-verified the GitHub-auth follow-up empirically (env var alone is
+insufficient; see the Open Questions entry)
 before starting Task 27.**
 **Branch pattern in use:** `feature/phase-<N>-<short-description>`, one PR per phase (docs-only
 housekeeping like this entry uses `docs/<short-description>` instead)
@@ -1545,6 +1548,56 @@ cases, no duplication of each page's own already-existing coverage.
   extra external check. Cluster is currently live and **billing** — both `t3.medium` instances
   running, will be auto-stopped by the account's budget-keeper Lambda at 13:00 UTC (16:00
   Jerusalem) if still running at that time.
+
+### Task 29 (`iam`/`s3`/`dynamodb`/`sqs` modules, parameterized by `env`) — ✅ complete, validate-only (no `apply` — plan doesn't call for one)
+
+- Created `terraform/modules/{iam,s3,dynamodb,sqs}/*` per plan.md — four standalone,
+  independently-validated modules, none wired into any environment yet (that's Task 30's job).
+  Confirmed against plan.md before starting: **Task 29's own Step 5 is validate-only**
+  (`for m in s3 dynamodb sqs iam; do terraform init -backend=false && terraform validate; done`)
+  — no `apply` anywhere in this task's text, and these modules have no environment root to apply
+  *from* yet regardless (`dev`/`prod` don't exist until Task 30). So there was nothing to apply
+  and, per the user's specific ask, no possibility of a new account-guardrail IAM deny surfacing
+  this session — that check only becomes possible once Task 30 actually applies these modules
+  for real.
+- **One plan-snippet bug found, same class as Tasks 27/28's recurring one, confirmed empirically
+  via `terraform validate` against the literal snippet first:** `dynamodb/main.tf`'s four
+  `attribute` blocks used semicolon-separated single-line arguments
+  (`attribute { name = "analysis_id"; type = "S" }`) — invalid HCL, same
+  `Error: Invalid character`/`Invalid single-argument block definition` as Task 27's
+  ingress/egress blocks and identical in shape. Fixed the same way: one argument per line, values
+  unchanged. This is now the **third** occurrence of this exact plan-authoring mistake across
+  Phase 6 (Task 27's `ingress`/`egress`, Task 28's `instance_type`/`file_permissions`-adjacent
+  variable blocks, now this) — condensed single-line block syntax in the plan's own snippets is
+  reliably wrong wherever it appears; worth assuming Task 30's `monitoring` module snippet
+  (`aws_cloudwatch_metric_alarm`, similar block-heavy shape) will need the same treatment.
+- **Not a bug — worth distinguishing from the above:** the `iam` module's inline policy
+  statements (`{ Effect = "Allow", Action = [...], Resource = "..." }`, comma-separated on one
+  line inside `jsonencode({...})`) validated cleanly with no changes needed. These are HCL
+  **object-constructor expressions** (map literals), not block syntax — commas *are* valid there,
+  newlines are also valid; only block syntax (`resource`/`variable`/`ingress`/`attribute`/etc.)
+  forbids commas. Confirmed by the fact `terraform validate` raised zero complaints about this
+  file, unlike the three prior findings — checked deliberately before assuming this task would
+  have a fourth instance of the same bug class.
+- **Deprecation warning, not an error, not fixed:** `dynamodb/main.tf` validates with `Success!`
+  but 4 warnings — `hash_key is deprecated. Use key_schema instead` (the top-level `hash_key` plus
+  3 more from the same underlying cause, likely the GSIs' `hash_key`/`range_key` args under the
+  currently-resolved `hashicorp/aws v6.58.0`). Plan's snippet still works as written and this
+  doesn't block anything `terraform validate`/`plan`/`apply` check for — left as-is rather than
+  rewriting to `key_schema`, consistent with the "don't diverge from the plan's literal snippets
+  over non-blocking findings" precedent already set for Tasks 27/28's `fmt`-only issues (deferred
+  to Task 31, which is the task that actually owns a repo-wide cleanup pass).
+- **Validation:** `terraform init -backend=false && terraform validate` — `Success!` for all four
+  modules (`s3`, `sqs`, `iam` with zero warnings; `dynamodb` with the 4 deprecation warnings
+  noted above, still `Success!`). Each module's own `.terraform.lock.hcl` committed per
+  Terraform's own recommendation, matching Tasks 27/28's precedent.
+- **Environment note, not a plan issue:** `terraform init`/`validate` in this sandboxed
+  environment intermittently hung for 15–60+ seconds *after* printing `Success!` — root-caused to
+  Terraform's default "checkpoint" upgrade-check phoning home, likely slow/blocked on this
+  network. Added `CHECKPOINT_DISABLE=1` to `~/.bashrc` (a local tooling speedup, not a repo
+  change) rather than re-diagnosing this again in Task 30/31.
+- No credential/secret handling, no AWS resources created or touched (validate-only, no live AWS
+  calls beyond provider-plugin download/registry lookups).
 
 ---
 
