@@ -7,9 +7,9 @@ resource "aws_iam_role_policy" "env_access" {
     Statement = [
       { Effect = "Allow", Action = ["s3:GetObject", "s3:PutObject"], Resource = "${var.bucket_arn}/*" },
       { Effect = "Allow", Action = ["dynamodb:GetItem", "dynamodb:PutItem", "dynamodb:Query"],
-        Resource = [var.table_arn, "${var.table_arn}/index/*"] },
+      Resource = [var.table_arn, "${var.table_arn}/index/*"] },
       { Effect = "Allow", Action = ["sqs:SendMessage", "sqs:ReceiveMessage", "sqs:DeleteMessage", "sqs:GetQueueAttributes"],
-        Resource = [var.queue_arn, var.dlq_arn] },
+      Resource = [var.queue_arn, var.dlq_arn] },
       { Effect = "Allow", Action = ["cloudwatch:PutMetricData", "logs:CreateLogStream", "logs:PutLogEvents"], Resource = "*" },
     ]
   })

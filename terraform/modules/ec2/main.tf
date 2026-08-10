@@ -1,6 +1,6 @@
 data "aws_ami" "ubuntu" {
   most_recent = true
-  owners      = ["099720109477"]  # Canonical
+  owners      = ["099720109477"] # Canonical
   filter {
     name   = "name"
     values = ["ubuntu/images/hvm-ssd/ubuntu-jammy-22.04-amd64-server-*"]
@@ -10,7 +10,7 @@ data "aws_ami" "ubuntu" {
 resource "aws_iam_role" "worker" {
   name = "testscope-k8s-worker-role"
   assume_role_policy = jsonencode({
-    Version = "2012-10-17"
+    Version   = "2012-10-17"
     Statement = [{ Action = "sts:AssumeRole", Effect = "Allow", Principal = { Service = "ec2.amazonaws.com" } }]
   })
 }
@@ -80,7 +80,7 @@ resource "aws_instance" "worker" {
   iam_instance_profile   = aws_iam_instance_profile.worker.name
   key_name               = aws_key_pair.cluster.key_name
   user_data = templatefile("${path.module}/cloud-init-worker.yaml.tpl", {
-    kubeadm_token             = local.kubeadm_token
+    kubeadm_token            = local.kubeadm_token
     control_plane_private_ip = aws_instance.control_plane.private_ip
   })
 

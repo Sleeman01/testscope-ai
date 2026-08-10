@@ -29,7 +29,7 @@ resource "aws_cloudwatch_metric_alarm" "queue_backlog_age" {
   namespace           = "AWS/SQS"
   period              = 300
   statistic           = "Maximum"
-  threshold           = 900  # 15 min backlog
+  threshold           = 900 # 15 min backlog
   dimensions          = { QueueName = "testscope-jobs-${var.env}" }
   alarm_actions       = [aws_sns_topic.alerts.arn]
 }
