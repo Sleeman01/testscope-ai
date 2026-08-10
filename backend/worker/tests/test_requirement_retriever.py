@@ -10,7 +10,7 @@ async def test_retrieves_issue_body_and_comments():
     state = {"repository": "acme/widgets", "issue_number": 42, "tool_call_trace": [], "warnings": []}
     with patch("app.nodes.requirement_retriever._fetch_issue_body", new=AsyncMock(return_value="Add login")), \
          patch("app.nodes.requirement_retriever.call_github_tool",
-               new=AsyncMock(return_value={"comments": [{"body": "clarification"}]})):
+               new=AsyncMock(return_value=[{"body": "clarification"}])):
         result = await requirement_retriever(state)
     assert result["issue_body"] == "Add login"
     assert result["issue_comments"] == ["clarification"]

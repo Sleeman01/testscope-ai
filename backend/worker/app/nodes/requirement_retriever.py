@@ -37,7 +37,14 @@ async def requirement_retriever(state: dict) -> dict:
             "issue_read", method="get_comments", owner=owner, repo=repo,
             issue_number=state["issue_number"],
         )
-        state["issue_comments"] = [c.get("body", "") for c in comments.get("comments", [])]
+        # Real bug, pre-existing since Task 11 — first exposed by a real call against the
+        # real mcp-github server (Task 43): `issue_read`'s `get_comments` method returns a
+        # bare JSON list of comments directly, not `{"comments": [...]}`. design.md §5.2
+        # already documented this ("Confirmed working — returns a list of comments") when
+        # Task 8 verified the tool live, but Task 11's implementation (and this file's own
+        # unit test mock) assumed the wrapped-dict shape anyway — every test through Task 42
+        # mocked call_github_tool, so the mismatch never surfaced until now.
+        state["issue_comments"] = [c.get("body", "") for c in comments]
     except Exception:
         logger.exception("Could not fetch issue comments for %s#%s", state["repository"], state["issue_number"])
         state["issue_comments"] = []

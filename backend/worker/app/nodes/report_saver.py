@@ -19,12 +19,22 @@ async def report_saver(state: dict) -> dict:
     # AnalysisRecord), so that's where the single, correctly-labeled increment now lives.
     state["status"] = "completed"
     try:
-        await call_test_mcp_tool(
+        # Real bug, pre-existing since Task 17 — first exposed by Task 43's real end-to-end
+        # run (every earlier test mocks this call entirely, or constructs AnalysisRecord
+        # fixtures with s3_report_key already set, so the gap in this actual data flow never
+        # surfaced): the tool's return value (`{s3_report_key, dynamodb_status}`) was
+        # discarded outright. Without capturing s3_report_key into state, runner.py's final
+        # AnalysisRecord write has never had a value to put there — GET .../report has been
+        # unreachable (`s3_report_key=None` -> a botocore ParamValidationError, 500) for
+        # every analysis this project has ever completed, `storage_status: "saved"`
+        # notwithstanding.
+        result = await call_test_mcp_tool(
             "save_coverage_report", analysis_id=state["analysis_id"], repository=state["repository"],
             issue_number=state["issue_number"], requirement=state["requirement"],
             coverage_matrix=state["coverage_matrix"], missing_tests=state["missing_tests"],
             test_plan=state["test_plan"], status=state["status"], tool_call_trace=state.get("tool_call_trace", []),
         )
+        state["s3_report_key"] = result["s3_report_key"]
         state["storage_status"] = "saved"
     except Exception as exc:
         logger.exception("save_coverage_report failed for analysis_id=%s", state["analysis_id"])

@@ -1,0 +1,25 @@
+# Ported from kubernetes/base/mcp-github/auth-proxy-configmap.yaml (Task 33's Kubernetes
+# fix for the GitHub-auth gap, design.md §5.2 / project-log's "KNOWN FOLLOW-UP TASK") — same
+# nginx image, same envsubst-templating mechanism, same header-injection logic. nginx's
+# official image auto-renders *.template files under /etc/nginx/templates into
+# /etc/nginx/conf.d/ (stripping ".template") via envsubst at container start, substituting
+# any ${VAR}/$VAR token against the container's own environment — lowercase nginx variables
+# like $host below aren't touched, since no env var is literally named `host`.
+#
+# Only real difference from the Kubernetes version: proxy_pass targets the upstream
+# server's docker-compose service name (mcp-github-upstream:8101) instead of 127.0.0.1 —
+# compose containers don't share a network namespace the way pod containers do, so there's
+# no localhost to proxy to here. The equivalent isolation property (nothing outside this
+# compose project can reach the raw, unauthenticated server) comes from mcp-github-upstream
+# publishing no host port at all, not from a loopback bind.
+server {
+    listen 8100;
+    location / {
+        proxy_pass http://mcp-github-upstream:8101;
+        proxy_set_header Authorization "Bearer ${GITHUB_TOKEN}";
+        proxy_set_header Host $host;
+        proxy_http_version 1.1;
+        proxy_set_header Connection "";
+        proxy_buffering off;
+    }
+}

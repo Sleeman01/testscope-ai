@@ -28,3 +28,7 @@ class AgentState(TypedDict):
     # defeating design.md §13's "storage_status=failed logged and alerted, not silently
     # dropped" requirement — ironically via the exact silent-drop it warns against.
     storage_status: str | None
+    # Same LangGraph silent-drop trap as storage_status above, same fix — report_saver.py
+    # sets this (Task 43 fix) but it was never declared here, so the state key was silently
+    # dropped and runner.py's final AnalysisRecord always got s3_report_key=None.
+    s3_report_key: str | None

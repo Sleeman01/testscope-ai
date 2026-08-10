@@ -25,27 +25,31 @@ complete, merged to `main` via PR #12) → 4 (`backend/api`, Tasks 18–22, comp
 `main` via PR #13) → 5 (`frontend`, Tasks 23–26, complete, merged to `main` via PR #14) → 6
 (`terraform`, Tasks 27–31, complete, merged to `main` via PR #15) → 7 (`kubernetes`, Tasks 32–35,
 complete, merged to `main` via PR #16 code + PR #17 docs) → 8 (`CI/CD`, Tasks 36–38, complete,
-merged to `main` via PR #18) → 9 (`observability`, Tasks 39–42) — **Phase 9 ✅ all 4 tasks
-complete, full regression green, live-AWS Task 42 verification actually run end-to-end and
-confirmed by the user (email receipt included) — pushed, not yet merged (PR left for the user to
-open/merge directly, per the standing Phase 7/8 preference).** Tasks 39–42 built the full
-Prometheus/Grafana/Loki/Promtail observability stack: `backend/shared/metrics.py` +
-`mcp-server/mcp_metrics.py` (Counter/Histogram primitives, `/metrics` mounted on `api`/`worker`/
-`mcp-server`), `kubernetes/monitoring/` (RBAC, Prometheus scrape config, Grafana with
-datasource/dashboard provisioning, Loki, Promtail, the System Health dashboard ConfigMap), and a
-real, live-verified CloudWatch DLQ alarm (fired, emailed, cleared). Full detail, every found-and-
-fixed plan-snippet bug, and the still-open gaps below. **Three new open items from this phase, not
-previously flagged anywhere:** the "Pod Restarts" dashboard panel has no data source
-(kube-state-metrics isn't deployed anywhere in this project), the "Recent Failed Analyses" log
-panel has no data source either (structured JSON logging per design.md §12 was never implemented
-by any task through Task 41), and `testscope_llm_calls_total` is declared but never incremented
-anywhere — see Open Questions below.
+merged to `main` via PR #18) → 9 (`observability`, Tasks 39–42, complete, merged to `main` via
+PR #19) → 10 (`local full-stack integration`, Task 43) — **Phase 10 ✅ complete, local E2E smoke
+test genuinely PASSED end-to-end (`status: completed`, verified by reading real output, not
+inferred) — pushed, not yet merged (PR left for the user to open/merge directly, per the
+standing Phase 7/8/9 preference).** Task 43 is the first task in the whole project to run every
+service via its real Docker entrypoint and make real Claude/GitHub API calls simultaneously —
+that exposed five previously-undetected production bugs no earlier phase's mocked-boundary
+tests could reach: `backend/worker/Dockerfile`'s `CMD` (broken since Task 17 — `python
+app/main.py` vs. `python -m app.main`), three LLM nodes' `RootModel[list[...]]` tool schemas
+(invalid Anthropic `input_schema`, since Task 13/16/17), `llm_client.py`'s `max_tokens=4096`
+(too small for real structured output, truncating tool calls), `requirement_retriever.py`'s
+`issue_read`/`get_comments` shape assumption (wrong since Task 11, silently discarding every
+real comment), and `s3_report_key` never persisted to any completed analysis's DynamoDB record
+(since Task 17 — `GET .../report` has been unreachable for every real analysis this project has
+ever completed). All five fixed and verified; full detail in the Phase 10 entry below. Also
+ported the k8s auth-proxy sidecar pattern into `docker-compose.yml` for the GitHub-auth gap, and
+replaced the plan's `octocat/Hello-World` smoke-test target with a purpose-built fixture issue
+(`Sleeman01/testscope-ai#20`) after confirming empirically that repo can never produce a
+`completed` result.
 **Branch pattern in use:** `feature/phase-<N>-<short-description>`, one PR per phase (docs-only
 housekeeping like this entry uses `docs/<short-description>` instead)
-**Current branch:** `feature/phase-9-observability` (cut fresh from `main` after confirming PR #18
-merged). Pushed to origin — not merged yet, PR left for the user to open/merge directly.
-**Last merged:** Phase 8 (Tasks 36–38, `CI/CD`) → `main` via PR #18 (merged 2026-08-10T11:52:38Z),
-confirmed via `gh pr list` before trusting it.
+**Current branch:** `feature/phase-10-local-integration` (cut fresh from `main` after confirming
+PR #19 merged). Pushed to origin — not merged yet, PR left for the user to open/merge directly.
+**Last merged:** Phase 9 (Tasks 39–42, `observability`) → `main` via PR #19 (merged, confirmed
+via `gh pr list` before trusting it — local `main` was 8 commits behind at session start).
 **Session-start correction (Phase 9):** local `main` was 4 commits behind `origin/main` (the PR
 #18 merge happened upstream but hadn't been fetched locally). Confirmed via `gh pr list` (shown
 MERGED) before trusting it, then `git fetch origin` + `git checkout main` +
@@ -2332,6 +2336,200 @@ cases, no duplication of each page's own already-existing coverage.
     in this session's own memory.
 
 ---
+
+### Phase 10 — Local Full-Stack Integration (Task 43) — ✅ complete
+
+- Branch: `feature/phase-10-local-integration`, cut from `main` after confirming PR #19
+  (Phase 9) merged (local `main` was 8 commits behind — same session-start correction pattern
+  as every prior phase).
+- **Pre-work (before implementing):** read plan.md's Task 43 (only task in Phase 10) and ran
+  the standing open-items applicability check. Two real problems found and resolved in chat
+  before any code was written, not silently:
+  1. **GitHub-auth gap directly blocks this task, for the first time outside Kubernetes.**
+     Task 43's own docker-compose snippet points `mcp-github` at the raw
+     `ghcr.io/github/github-mcp-server:latest` image with no bearer-header injection — the
+     exact configuration Task 8/Phase 7 already proved 401s on every request. **User decision:**
+     port Task 33's nginx auth-proxy sidecar pattern into docker-compose as a second service.
+  2. **Smoke-test target contradicts itself.** Task 43's Interfaces line claims "a local
+     fixture repo path, not github.com," but its own Step 3 script posts
+     `octocat/Hello-World`, a real public repo. Checked empirically (extracted and inspected
+     the `github-mcp-server` binary directly, not just `--help`): no flag, env var, or mode
+     exists to point the official image at a local git repository — only `--gh-host` for a
+     real GitHub Enterprise Server instance. **User decision:** accept the scope change, use a
+     real narrowly-scoped read-only PAT against real github.com. Per this project's standing
+     convention of never editing `plan.md`'s historical task text (design.md gets corrected
+     instead; see Task 31/Phase 6's precedent) — this correction is recorded here, not by
+     editing plan.md's Task 43 Interfaces line.
+     - **`octocat/Hello-World` itself turned out to be structurally unusable, found by
+       actually running the smoke test against it, not assumed.** First real run failed with
+       `status=failed`, `"No acceptance criteria found in issue body or comments"` —
+       correct, documented Node #4 graceful-termination behavior (design.md's error-handling
+       table), not a bug. Investigated why: `octocat/Hello-World#1`'s body is empty (confirmed
+       via a direct `GET /repos/octocat/Hello-World/issues/1` call), and so is every other
+       issue on that repo (checked the full list — `octocat/Hello-World` is GitHub's generic
+       tutorial/practice repo; every issue on it is a throwaway test post, none over ~175
+       characters). Also checked `microsoft/vscode#1` (used for a different purpose in Task
+       8's live verification) as a possible substitute — also an empty body, comments are
+       just "Looks easy enough!"/"👍", not requirements either. **Conclusion: no issue on
+       `octocat/Hello-World` can ever reach `status=completed`** — inherent to what the repo
+       is, not bad luck with issue #1. **User decision:** use a purpose-built fixture issue in
+       `Sleeman01/testscope-ai` itself instead — fully within the user's control, guaranteed
+       stable. Created via `gh issue create` (issue **#20**, "[Smoke Test Fixture] Sample
+       acceptance criteria for local E2E test", 3 bulleted acceptance criteria); content
+       verified read-back via `gh issue view` before wiring it into the script.
+       `scripts/local-e2e-smoke-test.sh` now targets `{"repository": "Sleeman01/testscope-ai",
+       "issue_number": 20}`, with the script's own header comment explaining why, so the next
+       person reading it doesn't have to rediscover this.
+- **Decision 1 implemented — mcp-github split into two docker-compose services**
+  (`mcp-github-upstream` + `mcp-github`), not one, mirroring
+  `kubernetes/base/mcp-github/{deployment.yaml,auth-proxy-configmap.yaml}` as closely as
+  compose's networking model allows:
+  - `mcp-github-upstream`: the real image, `http --port 8101 --listen-host 0.0.0.0`
+    (`0.0.0.0` not `127.0.0.1` — compose containers don't share a network namespace the way
+    pod containers do; the equivalent isolation property comes from publishing no host port
+    at all, not from a loopback bind), `GITHUB_PERSONAL_ACCESS_TOKEN=${GITHUB_PAT}`.
+  - `mcp-github`: `nginx:1.27-alpine`, template ported verbatim in spirit from
+    `auth-proxy-configmap.yaml` to `docker/mcp-github-auth-proxy/default.conf.template`
+    (only real difference: `proxy_pass` targets `mcp-github-upstream:8101` by compose service
+    name instead of `127.0.0.1:8101`), injects `Authorization: Bearer ${GITHUB_TOKEN}` before
+    proxying. `worker`/`api`/`mcp-test-analysis` all still address
+    `http://mcp-github:8100/mcp` completely unchanged — that name now resolves to the proxy,
+    the same way the k8s Service object always pointed at the sidecar, transparently to every
+    caller. **`backend/worker/app/mcp_clients.py` untouched, stays token-free by design, per
+    explicit instruction.**
+  - Confirmed (not assumed) that `mcp-server/github_client.py`'s own direct
+    `Authorization: Bearer <token>` header (sent with whatever `GITHUB_TOKEN` `mcp-test-analysis`
+    holds — the plan's literal placeholder `local-dev-unused`) is harmless once it reaches the
+    proxy: `proxy_set_header Authorization ...` unconditionally overwrites any incoming header,
+    so the real PAT always reaches the upstream server regardless of what any caller sends —
+    exactly the "transparent fix, zero caller changes" property the k8s sidecar already relied on.
+  - Also empirically verified (before trusting the plan's `GITHUB_TOKEN=local-dev-unused`
+    placeholder for `mcp-test-analysis`'s own direct git-clone step, `mcp-server/server.py`'s
+    `https://x-access-token:{GITHUB_TOKEN}@github.com/...` URL): a bogus credential does **not**
+    break an anonymous-eligible clone of a public GitHub repo (`git clone` with a garbage
+    `x-access-token` succeeded identically to a credential-less clone, both exit 0). So the
+    placeholder is safe to leave as the plan's literal text here — no deviation needed.
+  - Credential handling, per explicit instruction: no PAT value ever entered this session.
+    `docker-compose.yml`'s header comment documents both required env vars
+    (`ANTHROPIC_API_KEY`, `GITHUB_PAT`) and that they're read from the shell/a gitignored
+    `.env` (already covered by existing `.env`/`.env.*` gitignore patterns) — never
+    hardcoded. The user created and populated `.env` themselves.
+- **Real bugs found by actually running the stack (not discovered any other way — this is
+  the first task in the whole project that starts every service via its real entrypoint at
+  once), same "run it for real" pattern as every prior phase:**
+  1. **`localstack-init` depends_on race.** The plan's literal `depends_on: [localstack]`
+     only waits for the container to start, not for LocalStack's own services to be ready;
+     confirmed via a real run (`Could not connect to the endpoint URL`). Fixed with Compose's
+     native `condition: service_healthy` against `localstack/localstack:3.8`'s own built-in
+     `HEALTHCHECK`, not a custom retry loop.
+  2. **`localstack-init` re-run idempotency gap**, found on a later retry (after fixing an
+     unrelated port conflict without an intervening `docker compose down` — `localstack` had
+     no declared volume but stayed running continuously, so its in-memory state persisted):
+     the `&&`-chained commands aren't safe to re-run — `ResourceInUseException` on the first
+     command stopped the chain before the bucket/queue steps ran at all. Fixed with `|| true`
+     per step (`;`-separated instead of `&&`) — appropriate for this local-dev convenience
+     script specifically, not applied anywhere AWS-account-facing elsewhere in the repo.
+  3. **`backend/worker/Dockerfile`'s `CMD` has been broken since Task 17, unrelated to Task 43
+     itself — first exposed here because this is the first time anything in the project has
+     started this container via its real entrypoint.** `CMD ["python", "app/main.py"]` sets
+     `sys.path[0]` to the script's own directory (`/app/app`), not the `WORKDIR` (`/app`), so
+     `app/main.py`'s `from app.health import ...`/`from app.runner import ...` always failed
+     with `ModuleNotFoundError: No module named 'app'` in a real container run. Every earlier
+     check (Task 17) verified imports via `python -c "import app.main"` instead, which has
+     different `sys.path` semantics and never exercised this path; Phase 8's CI/CD never
+     caught it either since the self-hosted runner precondition was never met, so no real
+     `deploy-dev`/`deploy-prod` has ever actually started this container. **Fixed:**
+     `CMD ["python", "-m", "app.main"]`, matching how `uvicorn app.main:app` already resolves
+     the identical import in `backend/api/Dockerfile`. Confirmed fixed, not just assumed:
+     rebuilt, restarted, `docker compose logs worker` clean (silent poll loop, no traceback),
+     vs. the traceback before the fix.
+- **Port conflicts, found and resolved one at a time (real, pre-existing, unrelated local
+  processes on this dev machine — not touched, per explicit instruction each time):**
+  `api` 8000→8001 (`polyaifursa-agent-1`), `frontend` 3000→3002 (`polyaifursa-frontend-1` on
+  3000 *and* `polyaifursa-grafana-1` on the first-tried 3001), `worker` 8080→8081
+  (`polyaifursa-yolo-1`). Each remap confirmed against the live port listing before use, not
+  guessed. Container-internal ports unchanged in all three cases; only host-facing URLs moved
+  (`scripts/local-e2e-smoke-test.sh` updated to `localhost:8001`; no docs reference the
+  frontend's or worker's host port anywhere in the repo, so nothing else needed updating).
+- **`GITHUB_TOKEN` missing from `worker`'s environment entirely — real gap in the plan's own
+  Task 43 snippet, found by the first real smoke-test run.** `requirement_retriever.py`'s
+  issue-body fetch bypasses MCP (design.md §5.2) and calls `os.environ["GITHUB_TOKEN"]`
+  directly against real `api.github.com` — the plan's literal `worker` environment block
+  never declares it. First real run failed immediately: `Could not fetch issue body:
+  'GITHUB_TOKEN'` (a raw `KeyError`). **Fixed:** added `GITHUB_TOKEN=${GITHUB_PAT}` to
+  `worker`'s environment in `docker-compose.yml` — same PAT already used by the auth-proxy,
+  not a second secret; documented inline why this call needs it despite MCP-routed calls
+  staying token-free.
+- **Real, previously-undetected bug in three LLM nodes' tool schemas — first exposed because
+  Task 43 is the first task in the whole project to make a real Claude API call.**
+  `coverage_analyzer.py`, `test_plan_generator.py`, and `missing_test_recommender.py` all use
+  `RootModel[list[...]]` as their `call_llm` response model; `RootModel[list[X]]
+  .model_json_schema()` produces a top-level `{"type": "array", ...}` schema, but Anthropic's
+  tool `input_schema` requires `"type": "object"` — confirmed via the real 400:
+  `tools.0.custom.input_schema.type: Input should be 'object'`. **Fixed in one place**
+  (`backend/worker/app/llm_client.py`, not the three node files): when the response model's
+  schema is array-typed, wrap it in a single-property object (`{"entries": <array schema>}`)
+  for the request and unwrap `tool_use.input["entries"]` on the way back — the three nodes'
+  own `.root` usage and existing tests (which all mock `call_llm` itself) are untouched.
+  Verified the wrapped schema round-trips correctly for all three models via direct,
+  real-API calls against the running `worker` container (not assumed).
+- **Real, intermittent-looking bug that was actually deterministic once diagnosed:**
+  `test_plan_generator`'s real (non-toy) prompt against `TestPlan`'s verbose per-test-case
+  schema hit `llm_client.py`'s hardcoded `max_tokens=4096` — confirmed directly
+  (`stop_reason: "max_tokens"`, `usage.output_tokens: 4096`, `tool_use.input` truncated to an
+  empty dict). Three isolated single-node repro attempts with toy prompts all succeeded
+  first, which briefly looked like the array-wrapping fix was still broken (an incorrect
+  "items is a reserved JSON Schema keyword" collision theory was tried and documented, then
+  found wrong and removed once the real cause was confirmed) — the actual trigger only
+  reproduces with a real multi-criterion prompt. **Fixed:** raised to `max_tokens=16000`,
+  matching the claude-api skill's documented safe ceiling for a non-streaming request.
+- **Real, pre-existing bug since Task 11: `requirement_retriever.py`'s `issue_read`/
+  `get_comments` result-shape assumption was wrong, and its own unit test encoded the same
+  wrong assumption.** design.md §5.2 already recorded, from Task 8's live verification, that
+  `get_comments` "returns a list of comments" directly — but Task 11's implementation (and
+  `test_requirement_retriever.py`'s mock) assumed `{"comments": [...]}` anyway. Confirmed via
+  a real traceback (`AttributeError: 'list' object has no attribute 'get'`) — caught
+  non-fatally by the existing try/except (design's documented "fall back to issue body only"
+  behavior), so it never surfaced as a failure, just silently discarded every real comment.
+  **Fixed:** `[c.get("body", "") for c in comments]` (bare list), plus updated
+  `test_requirement_retriever.py`'s mock and `test_runner_e2e.py`'s `fake_issue_read_comments`
+  stub to match (both encoded the same wrong shape).
+- **Real, pre-existing bug since Task 17, the most significant of this task's findings:
+  `s3_report_key` has never been persisted for any analysis this project has ever completed.**
+  `report_saver.py` called `save_coverage_report` (which returns `{s3_report_key,
+  dynamodb_status}`) but discarded the return value outright; `runner.py`'s final
+  `AnalysisRecord` write never included `s3_report_key` as a field at all. Confirmed via a
+  real trace: `GET /api/analyses/{id}/report` 500'd with a bare `botocore.ParamValidationError`
+  (`Invalid type for parameter Key, value: None`) despite `storage_status: "saved"` on the
+  same record — the report genuinely saved to S3, the pointer to it just never reached
+  DynamoDB. **Fixed in three places, matching this file's own state.py precedent for
+  `storage_status`:** `report_saver.py` now captures `result["s3_report_key"]` into state;
+  `app/state.py`'s `AgentState` TypedDict now declares it (LangGraph silently drops any state
+  key a node returns that isn't declared there — the exact trap `storage_status`'s own
+  comment already documents, now caught before shipping instead of after); `runner.py`'s
+  final `AnalysisRecord(...)` now passes it through. Added `assert result["s3_report_key"]
+  == "k"` to `test_report_saver.py`'s success case to close the gap that let this ship
+  undetected.
+- **Local E2E smoke test: PASSED for real, `status: "completed"`, verified by reading the
+  actual output — not inferred from exit code.** Full pipeline reached `status=completed`
+  against `Sleeman01/testscope-ai#20` with a genuine LLM-produced requirement summary,
+  3-criterion coverage matrix (1 Covered via evidence from this repo's own real test files,
+  2 Not covered), a 26-item test plan, 2 missing-test recommendations, and a working presigned
+  S3 download URL. Took ~170s end-to-end (5 real sequential Claude calls at up to 16000
+  `max_tokens` each). `docker compose down` (teardown) clean.
+- **Post-fix full repo regression, all 4 Python services + frontend, run together:**
+  `backend/shared` 13/13, `backend/api` 17/17, `backend/worker` 44/44, `mcp-server` 26/26,
+  `frontend` 9/9 — all green, `ruff check .` clean across all 4 Python services. Secrets/
+  debug-marker sweep across the full diff: clean (no `sk-ant-`/`ghp_`/AKIA-shaped strings,
+  no `console.log`/`debugger`, no `TODO`/`FIXME`/`HACK`). `.env` (created by the user,
+  holding the real `GITHUB_PAT`/`ANTHROPIC_API_KEY`) confirmed untracked throughout — never
+  read or displayed by this session, per the user's explicit instruction.
+- **Verdict: Task 43 complete, the local full-stack integration genuinely works end-to-end.**
+  Five real, previously-undetected production bugs (`GITHUB_TOKEN` gap, array-schema tool
+  definitions, `max_tokens` truncation, `issue_read`/`get_comments` shape, `s3_report_key`
+  never persisted) surfaced and fixed only because this was the first task in the whole
+  project to run every service via its real entrypoint and make real Claude/GitHub API calls
+  at once — none were reachable by any earlier phase's mocked-boundary tests.
 
 ## Open Questions / Things to Revisit
 

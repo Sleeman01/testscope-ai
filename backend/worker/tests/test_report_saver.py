@@ -13,6 +13,7 @@ async def test_marks_completed_on_successful_save():
     with patch("app.nodes.report_saver.call_test_mcp_tool", new=AsyncMock(return_value={"s3_report_key": "k", "dynamodb_status": "saved"})):
         result = await report_saver(state)
     assert result["status"] == "completed"
+    assert result["s3_report_key"] == "k"
 
 @pytest.mark.asyncio
 async def test_save_failure_is_non_fatal():
