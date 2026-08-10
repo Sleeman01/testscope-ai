@@ -9,7 +9,6 @@ from moto import mock_aws
 
 from app.health import build_health_app
 from app.mcp_clients import call_github_tool
-from app.nodes.report_saver import report_saver
 from app.runner import run_analysis
 
 
@@ -69,18 +68,6 @@ async def test_call_github_tool_counts_error_status_on_terminal_failure():
     after = _counter_value(MCP_TOOL_CALL_COUNT, tool="get_issue", status="error")
     assert after == before + 1
 
-@pytest.mark.asyncio
-async def test_report_saver_increments_analysis_count():
-    before = _counter_value(ANALYSIS_COUNT, status="completed")
-    state = {"analysis_id": "m1", "repository": "acme/widgets", "issue_number": 1,
-              "requirement": {"feature_name": "Login"}, "coverage_matrix": [], "missing_tests": [],
-              "test_plan": [], "tool_call_trace": [], "warnings": [], "status": "running"}
-    with patch("app.nodes.report_saver.call_test_mcp_tool",
-               new=AsyncMock(return_value={"s3_report_key": "k", "dynamodb_status": "saved"})):
-        await report_saver(state)
-    after = _counter_value(ANALYSIS_COUNT, status="completed")
-    assert after == before + 1
-
 @pytest.fixture
 def store_env(monkeypatch):
     # Same leak-across-test-files reasoning as test_runner.py's own store_env fixture.
@@ -114,3 +101,39 @@ async def test_run_analysis_observes_analysis_duration(store_env):
         })
         await run_analysis(analysis_id="m2", repository="acme/widgets", issue_number=1, notes=None)
     assert _histogram_count(ANALYSIS_DURATION) == before + 1
+
+@pytest.mark.asyncio
+async def test_run_analysis_records_analysis_count_completed_on_success(store_env):
+    # Task 39 follow-up fix: ANALYSIS_COUNT now increments in runner.py's finally block
+    # (moved out of report_saver.py, which unconditionally set status="completed" and so
+    # could never produce a "failed" label). This exercises the real happy path through
+    # run_analysis, not report_saver in isolation, to prove the fix actually closes the gap
+    # the fixed code was written for.
+    before = _counter_value(ANALYSIS_COUNT, status="completed")
+    with (
+        patch("app.runner._graph") as mock_graph,
+        patch("app.runner.call_test_mcp_tool", new=AsyncMock(return_value={})),
+    ):
+        mock_graph.ainvoke = AsyncMock(return_value={
+            "analysis_id": "m3", "repository": "acme/widgets", "issue_number": 1,
+            "status": "completed", "tool_call_trace": [], "warnings": [], "missing_tests": [],
+        })
+        await run_analysis(analysis_id="m3", repository="acme/widgets", issue_number=1, notes=None)
+    after = _counter_value(ANALYSIS_COUNT, status="completed")
+    assert after == before + 1
+
+@pytest.mark.asyncio
+async def test_run_analysis_records_analysis_count_failed_on_graph_exception(store_env):
+    # The specific case that was previously invisible to this metric: an early/failed
+    # termination (here, a graph exception — the same code path a request_validator/
+    # requirement_retriever/requirement_parser early-failure or a timeout also hits) never
+    # reaches report_saver at all, so under the old wiring this label never fired.
+    before = _counter_value(ANALYSIS_COUNT, status="failed")
+    with (
+        patch("app.runner._graph") as mock_graph,
+        patch("app.runner.call_test_mcp_tool", new=AsyncMock(return_value={})),
+    ):
+        mock_graph.ainvoke = AsyncMock(side_effect=RuntimeError("boom"))
+        await run_analysis(analysis_id="m4", repository="acme/widgets", issue_number=1, notes=None)
+    after = _counter_value(ANALYSIS_COUNT, status="failed")
+    assert after == before + 1
