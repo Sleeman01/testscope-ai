@@ -70,7 +70,10 @@ async def test_full_pipeline_reaches_completed_status(full_env):
 
     async def fake_issue_read_comments(tool_name, **kwargs):
         assert tool_name == "issue_read"
-        return {"comments": []}
+        # Bare list, matching the real server's confirmed shape (design.md §5.2) — not
+        # {"comments": [...]}, which requirement_retriever.py incorrectly assumed until the
+        # Task 43 fix (this stub encoded the same wrong assumption).
+        return []
 
     # unittest.mock.patch replaces an attribute on the module it's given — it does NOT
     # retroactively change a name already imported elsewhere via `from x import y` (each

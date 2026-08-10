@@ -66,6 +66,7 @@ async def run_analysis(analysis_id: str, repository: str, issue_number: int, not
                 status=state.get("status", "failed"), created_at=now, updated_at=now,
                 requirement_summary=state.get("requirement", {}).get("feature_name"),
                 error_message=state.get("error_message"), storage_status=state.get("storage_status"),
+                s3_report_key=state.get("s3_report_key"),
                 missing_tests_count=len(state.get("missing_tests", [])),
                 tool_call_trace=state.get("tool_call_trace", []),
             ))

@@ -11,4 +11,13 @@ COPY backend/worker/pyproject.toml .
 RUN pip install --no-cache-dir .
 COPY backend/worker/ .
 EXPOSE 8080
-CMD ["python", "app/main.py"]
+# Real bug, pre-existing since Task 17, first exposed by Task 43 actually starting this
+# container via its real CMD (every earlier check used `python -c "import app.main"`, a
+# different sys.path setup): `python app/main.py` sets sys.path[0] to the script's own
+# directory (/app/app), not the cwd (/app) — app/main.py's `from app.health import ...`/
+# `from app.runner import ...` then fail with `ModuleNotFoundError: No module named 'app'`,
+# since there's no `app` package reachable from inside /app/app itself. `python -m app.main`
+# adds the cwd (/app, this Dockerfile's WORKDIR) to sys.path instead, matching how uvicorn
+# already resolves `app.main:app` in backend/api/Dockerfile and how pytest resolves
+# `app.*` imports in this service's own test suite.
+CMD ["python", "-m", "app.main"]
