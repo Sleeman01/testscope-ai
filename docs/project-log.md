@@ -2531,6 +2531,56 @@ cases, no duplication of each page's own already-existing coverage.
   project to run every service via its real entrypoint and make real Claude/GitHub API calls
   at once — none were reachable by any earlier phase's mocked-boundary tests.
 
+---
+
+### CI fix — ghcr.io image tag lowercasing (`deploy-dev.yml`/`deploy-prod.yml`) — ✅ complete
+
+- Branch: `fix/ghcr-lowercase-image-tag`, cut from `main` after confirming PR #21 (Phase 10)
+  merged (local `main` was 2 commits behind — same session-start correction pattern as every
+  prior phase).
+- **Real CI failure, reported by the user, not found during a health check:** `docker build -t
+  ghcr.io/${{ github.repository_owner }}/testscope-...` fails outright — ghcr.io (like every
+  OCI registry) requires an all-lowercase repository name, and `github.repository_owner`
+  preserves the GitHub username's actual casing (`Sleeman01`). Confirmed via a direct dry-run
+  of the exact extracted bash logic with the real value (`Sleeman01` → `ghcr.io/Sleeman01/...`,
+  invalid), not just inspected by eye.
+- **Grepped every workflow for `ghcr.io`/`github.repository`/`github.repository_owner`
+  first, rather than assuming which files were affected:** `pr.yml`'s image builds never
+  reach `ghcr.io` at all (bare `testscope-<image>:<sha>`, no push) — unaffected. Both
+  `deploy-dev.yml` and `deploy-prod.yml` construct `ghcr.io/${{ github.repository_owner }}/...`
+  in two places each: the `build-and-push` job's `docker build`/`docker push` pair, and the
+  `deploy` job's `sed` substitution loop that retags the rendered kustomize manifests
+  (`deploy-dev.yml` uses `${{ github.sha }}`, `deploy-prod.yml` uses `${{ github.ref_name }}`
+  — the only difference between the two).
+- **Fixed in both files, both jobs (4 sites total):** `OWNER_LC=$(echo "${{
+  github.repository_owner }}" | tr '[:upper:]' '[:lower:]')` computed once per `run:` block
+  (GitHub Actions' `${{ }}` expression language has no built-in `lower()`; `GITHUB_ENV` doesn't
+  persist across jobs, so it's recomputed once in `build-and-push` and once in `deploy`, not
+  hoisted to a single shared value), then referenced as `${OWNER_LC}` everywhere the tag is
+  built. Deliberately not hardcoded as a literal `sleeman01` string — derived from the existing
+  `github.repository_owner` expression so it keeps working if the repo is ever renamed or
+  forked under a different owner.
+- **Verified two ways, not just eyeballed:** (1) `python3 -c "import yaml; yaml.safe_load(...)"`
+  on both edited files — valid YAML, no structural breakage from the edit. (2) Extracted the
+  actual bash logic (the `OWNER_LC=...` line plus every downstream construction — build tag,
+  push tag, and the `sed` substitution against a sample manifest line) and ran it for real
+  with `github.repository_owner` set to the literal value `"Sleeman01"`: produced
+  `ghcr.io/sleeman01/testscope-api:abc1234` (build/push) and correctly rewrote
+  `ghcr.io/testscope-ai/api:latest` → `ghcr.io/sleeman01/testscope-api:abc1234` via the sed
+  substitution, for both the `github.sha` (dev) and `github.ref_name` (prod) cases.
+- **Repo-wide sweep for any other `ghcr.io` tag construction site, not just the two files
+  already found:** the only other `ghcr.io/testscope-ai/*:latest` references are the
+  **static placeholder tags** in `kubernetes/base/*/deployment.yaml` — per plan.md's own
+  documented design, these are fixed literals overwritten by this exact CI `sed` step, not
+  derived from `github.repository_owner`, so they were never affected.
+  `ghcr.io/github/github-mcp-server:latest` (the official third-party image) is likewise
+  unrelated — not owner-derived at all.
+- **`docs/2026-07-30-testscope-ai-plan.md` contains the same original (unfixed) snippet —
+  left as-is, per this project's standing convention of never editing `plan.md`'s historical
+  task text** (see Task 31/Phase 6's precedent, and Task 43's Interfaces-line correction
+  above); this entry is the authoritative record of the deviation instead.
+- No credential/secret handling — `${{ secrets.GITHUB_TOKEN }}` usage untouched by this fix.
+
 ## Open Questions / Things to Revisit
 
 - **NEW (Phase 9), OPEN: the Grafana dashboard's "Pod Restarts" panel has no data source.**
