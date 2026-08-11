@@ -3,7 +3,7 @@
 # found" repo surfaces as a zero-item result rather than a tool-level error.
 import logging
 
-from app.mcp_clients import call_github_tool
+from worker_app.mcp_clients import call_github_tool
 
 logger = logging.getLogger(__name__)
 

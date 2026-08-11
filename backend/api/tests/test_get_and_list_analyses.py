@@ -36,7 +36,7 @@ def client(monkeypatch):
         )
         sqs = boto3.client("sqs", region_name="us-east-1")
         sqs.create_queue(QueueName="q")
-        from app.main import create_app
+        from api_app.main import create_app
         yield TestClient(create_app())
 
 def test_get_returns_404_for_unknown_id(client):

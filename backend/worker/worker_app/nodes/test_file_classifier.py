@@ -1,6 +1,6 @@
 import logging
 
-from app.mcp_clients import call_test_mcp_tool
+from worker_app.mcp_clients import call_test_mcp_tool
 
 logger = logging.getLogger(__name__)
 

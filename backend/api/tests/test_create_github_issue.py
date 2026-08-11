@@ -26,7 +26,7 @@ def client(monkeypatch):
         sqs.create_queue(QueueName="q")
         s3 = boto3.client("s3", region_name="us-east-1")
         s3.create_bucket(Bucket="testscope-reports-test")
-        from app.main import create_app
+        from api_app.main import create_app
         yield TestClient(create_app())
 
 def test_returns_404_for_unknown_id(client):
@@ -49,7 +49,7 @@ def test_creates_issue_when_completed(client):
     ddb = boto3.resource("dynamodb", region_name="us-east-1").Table("testscope-analyses-test")
     ddb.update_item(Key={"analysis_id": analysis_id}, UpdateExpression="SET #s = :s, s3_report_key = :k",
                      ExpressionAttributeNames={"#s": "status"}, ExpressionAttributeValues={":s": "completed", ":k": s3_key})
-    with patch("app.routes.analyses.call_github_tool", new=AsyncMock(return_value={"html_url": "https://github.com/acme/widgets/issues/99"})):
+    with patch("api_app.routes.analyses.call_github_tool", new=AsyncMock(return_value={"html_url": "https://github.com/acme/widgets/issues/99"})):
         response = client.post(f"/api/analyses/{analysis_id}/github-issue")
     assert response.status_code == 200
     assert response.json()["github_issue_url"] == "https://github.com/acme/widgets/issues/99"

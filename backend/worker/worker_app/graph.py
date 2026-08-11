@@ -1,17 +1,17 @@
 from langgraph.graph import END, StateGraph
 
-from app.nodes.coverage_analyzer import coverage_analyzer
-from app.nodes.missing_test_recommender import missing_test_recommender
-from app.nodes.quality_validator import quality_validator
-from app.nodes.report_saver import report_saver
-from app.nodes.request_validator import request_validator
-from app.nodes.requirement_parser import requirement_parser
-from app.nodes.requirement_retriever import requirement_retriever
-from app.nodes.test_file_classifier import test_file_classifier
-from app.nodes.test_file_retriever import test_file_retriever
-from app.nodes.test_plan_generator import test_plan_generator
-from app.nodes.test_search_planner import test_search_planner
-from app.state import AgentState
+from worker_app.nodes.coverage_analyzer import coverage_analyzer
+from worker_app.nodes.missing_test_recommender import missing_test_recommender
+from worker_app.nodes.quality_validator import quality_validator
+from worker_app.nodes.report_saver import report_saver
+from worker_app.nodes.request_validator import request_validator
+from worker_app.nodes.requirement_parser import requirement_parser
+from worker_app.nodes.requirement_retriever import requirement_retriever
+from worker_app.nodes.test_file_classifier import test_file_classifier
+from worker_app.nodes.test_file_retriever import test_file_retriever
+from worker_app.nodes.test_plan_generator import test_plan_generator
+from worker_app.nodes.test_search_planner import test_search_planner
+from worker_app.state import AgentState
 
 
 def _failed_or_continue(state: AgentState) -> str:

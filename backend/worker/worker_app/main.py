@@ -4,8 +4,8 @@ import time
 from config import get_settings
 from sqs import JobQueue
 
-from app.health import start_health_server
-from app.runner import run_analysis
+from worker_app.health import start_health_server
+from worker_app.runner import run_analysis
 
 
 def poll_forever() -> None:

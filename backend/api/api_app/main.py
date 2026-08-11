@@ -4,7 +4,7 @@ from fastapi import FastAPI, Request
 from metrics import API_REQUEST_COUNT, API_REQUEST_LATENCY
 from prometheus_client import make_asgi_app
 
-from app.routes import analyses, health
+from api_app.routes import analyses, health
 
 
 def create_app() -> FastAPI:

@@ -1,6 +1,6 @@
 from pydantic import BaseModel
 
-from app.llm_client import call_llm
+from worker_app.llm_client import call_llm
 
 
 class AcceptanceCriterion(BaseModel):

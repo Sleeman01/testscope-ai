@@ -9,7 +9,7 @@ import os
 
 import httpx2
 
-from app.mcp_clients import call_github_tool
+from worker_app.mcp_clients import call_github_tool
 
 logger = logging.getLogger(__name__)
 

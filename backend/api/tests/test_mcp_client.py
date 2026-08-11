@@ -3,7 +3,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from config import get_settings
 
-from app.mcp_client import call_github_tool
+from api_app.mcp_client import call_github_tool
 
 
 def _fake_result(text: str):
@@ -41,8 +41,8 @@ async def test_call_github_tool_parses_json_text_payload_over_the_real_mcp_trans
     transport_cm = AsyncMock()
     transport_cm.__aenter__.return_value = (AsyncMock(), AsyncMock())
 
-    with patch("app.mcp_client.streamable_http_client", return_value=transport_cm), \
-         patch("app.mcp_client.ClientSession", return_value=session_cm):
+    with patch("api_app.mcp_client.streamable_http_client", return_value=transport_cm), \
+         patch("api_app.mcp_client.ClientSession", return_value=session_cm):
         result = await call_github_tool("issue_write", method="create", owner="acme", repo="widgets")
 
     assert result == {"html_url": "https://github.com/acme/widgets/issues/99"}

@@ -3,7 +3,7 @@ import pytest
 from dynamodb import AnalysisStore
 from moto import mock_aws
 
-from app.nodes.job_intake import job_intake
+from worker_app.nodes.job_intake import job_intake
 
 
 @pytest.fixture

@@ -8,4 +8,4 @@ COPY backend/api/pyproject.toml .
 RUN pip install --no-cache-dir .
 COPY backend/api/ .
 EXPOSE 8000
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]
+CMD ["uvicorn", "api_app.main:app", "--host", "0.0.0.0", "--port", "8000"]

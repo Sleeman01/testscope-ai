@@ -8,9 +8,9 @@ from dynamodb import AnalysisStore
 from metrics import ANALYSIS_COUNT, ANALYSIS_DURATION
 from models import AnalysisRecord
 
-from app.graph import build_graph
-from app.mcp_clients import call_test_mcp_tool
-from app.nodes.job_intake import job_intake
+from worker_app.graph import build_graph
+from worker_app.mcp_clients import call_test_mcp_tool
+from worker_app.nodes.job_intake import job_intake
 
 logger = logging.getLogger(__name__)
 
