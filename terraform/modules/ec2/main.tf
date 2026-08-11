@@ -90,3 +90,13 @@ resource "aws_instance" "worker" {
   root_block_device { volume_size = 30 }
   tags = { Name = "testscope-k8s-worker" }
 }
+
+# Static public IP for the worker — ingress-nginx (hostNetwork: true) binds host ports
+# 80/443 here specifically (design.md §9/§10), so this is the address dev/prod DNS and
+# the nip.io hostname need to be stable against. Not in the original plan; added because
+# the worker's default ephemeral public IP changes on every stop/start.
+resource "aws_eip" "worker" {
+  domain   = "vpc"
+  instance = aws_instance.worker.id
+  tags     = { Name = "testscope-k8s-worker-eip" }
+}
