@@ -15,7 +15,14 @@ async def request_validator(state: dict) -> dict:
             "search_repositories", query=f"repo:{owner}/{repo}", minimal_output=False,
         )
     except Exception as exc:
-        logger.exception("Repository validation failed for %s", state["repository"])
+        logger.exception(
+            "Repository validation failed for %s", state["repository"],
+            extra={
+                "analysis_id": state.get("analysis_id"), "repository": state["repository"],
+                "issue_number": state.get("issue_number"), "node": "request_validator",
+                "status": "failed", "error_type": type(exc).__name__,
+            },
+        )
         state["status"] = "failed"
         state["error_message"] = f"Repository validation failed: {exc}"
         return state

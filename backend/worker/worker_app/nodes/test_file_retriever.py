@@ -13,7 +13,13 @@ async def test_file_retriever(state: dict) -> dict:
         )
         state["candidate_files"] = result["files"]
     except Exception as exc:
-        logger.exception("find_test_files failed for analysis_id=%s", state["analysis_id"])
+        logger.exception(
+            "find_test_files failed for analysis_id=%s", state["analysis_id"],
+            extra={
+                "analysis_id": state["analysis_id"], "repository": state.get("repository"),
+                "node": "test_file_retriever", "tool": "find_test_files", "error_type": type(exc).__name__,
+            },
+        )
         state["candidate_files"] = []
         state.setdefault("warnings", []).append(f"find_test_files failed; continuing with no candidate files: {exc}")
     return state

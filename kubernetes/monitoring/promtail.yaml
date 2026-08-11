@@ -12,6 +12,25 @@ data:
   # layout under kubeadm/containerd) and pushes to the same Loki URL already passed via
   # -client.url (kept for parity with the plan's literal args, though this config's own
   # clients: entry is what promtail actually uses).
+  #
+  # Post-Phase-11 hardening item 3, real bug found and fixed while verifying the
+  # dashboard's "Recent Failed Analyses" panel: the scrape_config above only ever attached
+  # one static label (`job: varlogs`) — no `namespace`, `pod`, or `container` label existed
+  # anywhere on these streams, since static_configs + a bare __path__ glob doesn't parse
+  # kubelet's own /var/log/pods/<namespace>_<pod>_<uid>/<container>/*.log directory
+  # convention on its own. The dashboard's `{namespace=~"dev|prod"}` selector (every panel
+  # in this ConfigMap, not just the logs one) would therefore have matched zero streams,
+  # independent of the logging-format fix in dashboard-configmap.yaml. Added the
+  # pipeline_stages below: `cri` unwraps containerd's own log-line wrapper (this cluster
+  # uses containerd — confirmed via terraform/modules/ec2/cloud-init-control-plane.yaml.tpl
+  # — not Docker's json-file format, so `cri`, not `docker`, is the correct stage) down to
+  # the application's raw stdout line, which Loki's `| json` parser stage then needs to see
+  # unprefixed; `regex` extracts namespace/pod/container from the well-known kubelet path
+  # convention via Promtail's standard `source: filename` idiom (the file-target's own
+  # `filename` label is seeded into the pipeline's extracted-fields map before any stage
+  # runs, precisely to enable this); `labels` promotes the two fields the dashboard actually
+  # queries on into real Loki labels (pod_name dropped — high-cardinality, unused by any
+  # panel here).
   config.yml: |
     server:
       http_listen_port: 9080
@@ -30,6 +49,14 @@ data:
             labels:
               job: varlogs
               __path__: /var/log/pods/*/*/*.log
+        pipeline_stages:
+          - cri: {}
+          - regex:
+              source: filename
+              expression: '^/var/log/pods/(?P<namespace>[^_]+)_(?P<pod_name>[^_]+)_(?P<pod_uid>[^/]+)/(?P<container>[^/]+)/'
+          - labels:
+              namespace:
+              container:
 ---
 apiVersion: apps/v1
 kind: DaemonSet

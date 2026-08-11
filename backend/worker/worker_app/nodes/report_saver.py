@@ -37,7 +37,19 @@ async def report_saver(state: dict) -> dict:
         state["s3_report_key"] = result["s3_report_key"]
         state["storage_status"] = "saved"
     except Exception as exc:
-        logger.exception("save_coverage_report failed for analysis_id=%s", state["analysis_id"])
+        # storage_status="failed" here, not status: this node only runs after every
+        # upstream node already succeeded (see the comment above), so the analysis itself
+        # is still "completed" per design.md §13 ("Analysis still returned to the caller;
+        # storage_status=failed logged and alerted, not silently dropped") -- omitting the
+        # status field rather than mislabeling a storage failure as an analysis failure.
+        logger.exception(
+            "save_coverage_report failed for analysis_id=%s", state["analysis_id"],
+            extra={
+                "analysis_id": state["analysis_id"], "repository": state.get("repository"),
+                "issue_number": state.get("issue_number"), "node": "report_saver",
+                "tool": "save_coverage_report", "error_type": type(exc).__name__,
+            },
+        )
         state["storage_status"] = "failed"
         state.setdefault("warnings", []).append(f"Report save failed: {exc}")
     return state

@@ -2,6 +2,7 @@ import asyncio
 import time
 
 from config import get_settings
+from logging_utils import configure_json_logging
 from sqs import JobQueue
 
 from worker_app.health import start_health_server
@@ -9,6 +10,7 @@ from worker_app.runner import run_analysis
 
 
 def poll_forever() -> None:
+    configure_json_logging()
     settings = get_settings()
     queue = JobQueue(settings.sqs_queue_url)
     start_health_server()

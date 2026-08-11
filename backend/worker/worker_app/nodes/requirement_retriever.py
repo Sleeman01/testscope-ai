@@ -28,7 +28,14 @@ async def requirement_retriever(state: dict) -> dict:
     try:
         state["issue_body"] = await _fetch_issue_body(owner, repo, state["issue_number"])
     except Exception as exc:
-        logger.exception("Could not fetch issue body for %s#%s", state["repository"], state["issue_number"])
+        logger.exception(
+            "Could not fetch issue body for %s#%s", state["repository"], state["issue_number"],
+            extra={
+                "analysis_id": state.get("analysis_id"), "repository": state["repository"],
+                "issue_number": state["issue_number"], "node": "requirement_retriever",
+                "status": "failed", "error_type": type(exc).__name__,
+            },
+        )
         state["status"] = "failed"
         state["error_message"] = f"Could not fetch issue body: {exc}"
         return state
@@ -45,8 +52,18 @@ async def requirement_retriever(state: dict) -> dict:
         # unit test mock) assumed the wrapped-dict shape anyway — every test through Task 42
         # mocked call_github_tool, so the mismatch never surfaced until now.
         state["issue_comments"] = [c.get("body", "") for c in comments]
-    except Exception:
-        logger.exception("Could not fetch issue comments for %s#%s", state["repository"], state["issue_number"])
+    except Exception as exc:
+        # Non-fatal: falls back to analyzing the issue body alone, so this is a degraded-
+        # continue, not a terminal analysis failure -- no status="failed" here (unlike the
+        # body-fetch failure above, which does return early with one).
+        logger.exception(
+            "Could not fetch issue comments for %s#%s", state["repository"], state["issue_number"],
+            extra={
+                "analysis_id": state.get("analysis_id"), "repository": state["repository"],
+                "issue_number": state["issue_number"], "node": "requirement_retriever",
+                "tool": "issue_read", "error_type": type(exc).__name__,
+            },
+        )
         state["issue_comments"] = []
         state.setdefault("warnings", []).append("Could not fetch issue comments; analyzing issue body only.")
     return state
