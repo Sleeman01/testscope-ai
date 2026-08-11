@@ -1,0 +1,32 @@
+# Live-capacity fix: the single worker node's allocatable CPU (2000m) is shared by dev's and
+# prod's full stacks — prod's worker/mcp-github/auth-proxy requests were reduced (CPU requests
+# only, limits unchanged) to close the scheduling gap confirmed against real cluster data
+# (Allocated resources: cpu 2 (100%), zero headroom) rather than resizing the EC2 instance.
+# Strategic-merge patch: `resources.requests` is a plain map, so specifying only `cpu` here
+# merges with base's `memory` value instead of replacing it — `limits` is untouched entirely.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: worker
+spec:
+  template:
+    spec:
+      containers:
+        - name: worker
+          resources:
+            requests: { cpu: 100m }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mcp-github
+spec:
+  template:
+    spec:
+      containers:
+        - name: mcp-github
+          resources:
+            requests: { cpu: 120m }
+        - name: auth-proxy
+          resources:
+            requests: { cpu: 20m }
