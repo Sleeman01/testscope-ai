@@ -2956,3 +2956,31 @@ cases, no duplication of each page's own already-existing coverage.
 - **Not part of any numbered task**, same as PRs #25–27 above — surfaced only by actually
   re-running the live deploy pipeline while gathering citations for Task 44, not from any planned
   step.
+
+### Prod smoke-test fix confirmed: first genuine green `deploy-prod.yml` run (PR #28, tag `v1.0.3`) — ✅ complete
+
+- **Branch:** `docs/task-44-test-plan` (PR #28, merged), tag `v1.0.3` pushed afterward
+  specifically to get a real, not-asserted, passing prod deploy as proof the timeout fix above
+  actually works — not just that it looks right by inspection.
+- **`production`'s GitHub Environment `required_reviewers` protection rule held as expected:**
+  pushing the tag queued the `deploy` job but did not touch the live cluster until the user
+  approved it manually in the Actions UI, consistent with design.md §11's "prod on manual
+  approval via a GitHub Environment protection rule."
+- **Run [31473796895](https://github.com/Sleeman01/testscope-ai/actions/runs/31473796895),
+  tag `v1.0.3`: genuinely green, all jobs `success`** (`build-and-push` ×4, `deploy`). The
+  `Smoke test` step's `kubectl wait` log shows all 5 Deployments reporting `condition met`
+  within ~0.6s of each other (`api`, `worker`, `frontend`, `mcp-test-analysis`, `mcp-github`,
+  ending `Smoke test passed.`) — comfortably inside the new 300s window, not a close call; the
+  cluster was already at steady state (warm images, no capacity squeeze) since the prior
+  `v1.0.2` run's pods were already confirmed Running/Ready before this deploy, so this run
+  didn't repeat the earlier cold-pull-plus-surge condition, it just confirmed nothing regressed.
+- **Verdict: this is the first genuinely green `deploy-prod.yml` run since the post-Phase-10
+  CI/infra saga began (PRs #22–28)** — every earlier prod deploy attempt (`v1.0.0`, `v1.0.1`,
+  `v1.0.2`) failed for a real, distinct reason (GHCR permissions/tag-casing, the kustomize
+  multi-document patch, the smoke-test timeout). `dev`'s deploy pipeline has been green since
+  PR #24; `prod`'s now is too, for the first time. Both environments are confirmed live and
+  passing their own post-deploy smoke test, not just "the manifests look right."
+- **Not part of any numbered task**, like the entries above — this is the closing confirmation
+  of the post-Phase-10 CI/infra saga, not new work; Task 44 (`docs/test-plan.md`) can now cite
+  a real, verified green run for both `dev` and `prod` instead of describing the pipeline only
+  in aspirational/design terms.
