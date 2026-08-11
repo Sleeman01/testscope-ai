@@ -17,4 +17,9 @@ a real GitHub PAT, and `kubectl apply -n <namespace> -f secret.yaml`. Nothing in
 creates that Secret automatically (see `docs/project-log.md`'s Phase 7 health check entry) —
 `mcp-test-analysis`, `mcp-github`, and its `auth-proxy` sidecar all reference it by name and
 won't start without it. `worker` also needs its own `worker-secrets` Secret (`anthropic-api-key`
-key) in each namespace, same manual-creation situation, not shipped as an example file here.
+key) in each namespace, same manual-creation situation, not shipped as an example file here —
+create it directly instead:
+
+```
+kubectl create secret generic worker-secrets --from-literal=anthropic-api-key=<ANTHROPIC_API_KEY> -n <namespace>
+```

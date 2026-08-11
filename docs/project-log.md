@@ -46,10 +46,15 @@ replaced the plan's `octocat/Hello-World` smoke-test target with a purpose-built
 `completed` result.
 **Branch pattern in use:** `feature/phase-<N>-<short-description>`, one PR per phase (docs-only
 housekeeping like this entry uses `docs/<short-description>` instead)
-**Current branch:** `feature/phase-10-local-integration` (cut fresh from `main` after confirming
-PR #19 merged). Pushed to origin — not merged yet, PR left for the user to open/merge directly.
-**Last merged:** Phase 9 (Tasks 39–42, `observability`) → `main` via PR #19 (merged, confirmed
-via `gh pr list` before trusting it — local `main` was 8 commits behind at session start).
+**Current branch:** `docs/k8s-config-secrets-gap` (cut fresh from `main` after confirming via
+`gh pr list` that PR #23 had merged — local `main` was 2 commits behind at session start,
+fast-forwarded first). Docs/manifest-only fix (`AWS_DEFAULT_REGION` + self-documenting
+`SQS_QUEUE_URL` placeholders in `kubernetes/base|dev|prod`, `worker-secrets` creation command in
+`.github/workflows/README.md`) — see the "Post-Phase-10 housekeeping" entry at the end of the
+Phase Log below for full detail. Awaiting user's "go" before commit/push.
+**Last merged:** PR #23 (`fix/ghcr-packages-write-permission`, `packages: write` grant for
+build-and-push) → `main`, confirmed via `gh pr list` (also merged since: PR #22 lowercase GHCR
+tag fix, PR #21 Phase 10 local integration).
 **Session-start correction (Phase 9):** local `main` was 4 commits behind `origin/main` (the PR
 #18 merge happened upstream but hadn't been fetched locally). Confirmed via `gh pr list` (shown
 MERGED) before trusting it, then `git fetch origin` + `git checkout main` +
@@ -2759,3 +2764,53 @@ cases, no duplication of each page's own already-existing coverage.
   `build-and-push` successfully (GitHub-hosted runner, no dependency on any of this) but the
   `deploy` job will simply never start — not fail loudly, just never pick up a runner. Worth
   knowing before assuming a quiet deploy run means success.
+
+### Post-Phase-10 housekeeping — source-level gap fix for live-patched `dev` config/secrets
+
+- **Branch:** `docs/k8s-config-secrets-gap`, cut fresh from `main` after confirming (via
+  `gh pr list`) that PR #23 (`fix/ghcr-packages-write-permission`) had merged upstream —
+  local `main` was 2 commits behind `origin/main`, same recurring session-start pattern as
+  every earlier phase. Fast-forwarded before branching.
+- **Trigger:** during live Phase-10-adjacent debugging, the `dev` namespace's `testscope-config`
+  ConfigMap and two Secrets (`github-token`, `worker-secrets`) were manually patched directly on
+  the cluster to get things running — none of that was reflected back into the checked-in
+  manifests/docs, so recreating `dev` from git alone would resurface the same gaps. This entry
+  documents the source-level (not live-cluster) fix, applied without touching the live cluster.
+- **`SQS_QUEUE_URL` placeholder + missing region — confirmed and fixed in both `dev` and `prod`:**
+  the literal `PASTE_FROM_TERRAFORM_OUTPUT_queue_url` placeholder actually lives in
+  `kubernetes/dev/configmap-patch.yaml` and `kubernetes/prod/configmap-patch.yaml` (the
+  per-namespace kustomize overlay patches), not `kubernetes/base/configmap.yaml` itself — base
+  only has the overlay-agnostic `SQS_QUEUE_URL: "REPLACED_BY_OVERLAY"` sentinel, which was already
+  correct. Reworded the placeholder to `REPLACE_WITH_TERRAFORM_OUTPUT_queue_url` with a comment
+  above it in both overlay files explaining the `terraform output queue_url` step, since kustomize
+  can't read a live Terraform output automatically. Left it as a placeholder (not the real live
+  value) per the task's own instruction — this fix was not given cluster access and didn't need it.
+  Confirmed `AWS_DEFAULT_REGION` was genuinely absent (not just under a different key — grepped
+  for `AWS_REGION` too, no hits anywhere in `kubernetes/`). Added `AWS_DEFAULT_REGION: "us-east-1"`
+  to `kubernetes/base/configmap.yaml` (not duplicated per-overlay) after confirming it's a safe,
+  non-environment-specific constant: `terraform/environments/{dev,prod,shared}/variables.tf` all
+  default `aws_region` to `"us-east-1"`, and the one checked-in `.tfvars` file
+  (`environments/dev/terraform.tfvars`) only sets `alert_email`, not `aws_region` — also
+  cross-checked against `environments/dev/terraform.tfstate`, which shows every deployed resource
+  actually landed in `us-east-1`. `backend/shared`'s `s3.py`/`sqs.py`/`dynamodb.py` all construct
+  boto3 clients/resources with no explicit region kwarg, so this env var is what they were silently
+  missing. Validated with `kubectl kustomize kubernetes/dev` and `kubernetes/prod` — both overlays
+  render `AWS_DEFAULT_REGION: us-east-1` merged in from base correctly.
+- **`.github/workflows/README.md`: the task's own premise was inverted, caught by checking before
+  assuming (per its explicit instruction to do so).** The task described `worker-secrets` as
+  already documented with an exact `kubectl create secret generic ... --from-literal=...` command,
+  and asked for an equivalent `github-token` entry to be added to match. Reading the file (and
+  cross-checking the Phase 8 log entry above, which already recorded this) showed the opposite:
+  `github-token` was already documented (copy `secret.yaml.example` → fill in → `kubectl apply`),
+  while `worker-secrets` was the one **without** a concrete command (explicitly noted as "not
+  shipped as an example file here"). Since no exact-command pattern for `worker-secrets` actually
+  existed to match, added one instead: `kubectl create secret generic worker-secrets
+  --from-literal=anthropic-api-key=<ANTHROPIC_API_KEY> -n <namespace>`. Did not duplicate or change
+  `github-token`'s existing (already-working) documented method. Flagged this inversion to the user
+  in the session's report rather than silently fixing the "wrong" file.
+- **Not done, out of scope for this fix:** no live-cluster interaction of any kind (no `kubectl get`
+  against the real `dev` namespace, no reading of the values that were live-patched tonight) — the
+  fix is purely to the checked-in source so a from-scratch `dev` recreation no longer regresses;
+  actually re-syncing live `dev` state (if it still differs from these files) is a separate,
+  not-yet-requested step.
+- Awaiting user's explicit "go" before commit/push, per this session's own instruction.

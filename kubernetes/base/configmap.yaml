@@ -5,6 +5,11 @@ metadata:
 data:
   ENV: "base"  # overridden per-namespace in Task 35
   LOG_LEVEL: "INFO"
+  # boto3 (backend/shared/s3.py, sqs.py, dynamodb.py) constructs clients with no explicit
+  # region kwarg, so it falls back to this env var. Not per-namespace: terraform/environments/
+  # {dev,prod,shared}/variables.tf all default `aws_region` to "us-east-1" and none of the
+  # checked-in .tfvars files override it — if that ever changes, update this to match.
+  AWS_DEFAULT_REGION: "us-east-1"
   DYNAMODB_TABLE: "REPLACED_BY_OVERLAY"
   S3_BUCKET: "REPLACED_BY_OVERLAY"
   SQS_QUEUE_URL: "REPLACED_BY_OVERLAY"
