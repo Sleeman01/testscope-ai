@@ -61,6 +61,17 @@ jobs:
           for img in api worker mcp-test-analysis frontend; do
             SED_ARGS+=(-e "s#ghcr.io/testscope-ai/${img}:latest#ghcr.io/${OWNER_LC}/testscope-${img}:${{ github.ref_name }}#g")
           done
+          # Durability fix: without this, every tagged push re-applies the checked-in
+          # REPLACE_WITH_TERRAFORM_OUTPUT_queue_url placeholder, reverting any live kubectl
+          # patch of the real queue URL and crash-looping worker with QueueDoesNotExist — same
+          # gap confirmed happening twice in dev. SQS_QUEUE_URL_PROD is a repo *variable* (not a
+          # secret — the URL isn't sensitive on its own), set once from `terraform output
+          # queue_url` in environments/prod.
+          if [ -z "${{ vars.SQS_QUEUE_URL_PROD }}" ]; then
+            echo "::error::SQS_QUEUE_URL_PROD repo variable is not set" >&2
+            exit 1
+          fi
+          SED_ARGS+=(-e "s#REPLACE_WITH_TERRAFORM_OUTPUT_queue_url#${{ vars.SQS_QUEUE_URL_PROD }}#g")
           kubectl kustomize . | sed "${SED_ARGS[@]}" > /tmp/rendered.yaml
           kubectl apply -f /tmp/rendered.yaml
       - name: Smoke test
