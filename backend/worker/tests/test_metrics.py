@@ -1,15 +1,35 @@
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import boto3
 import pytest
 from config import get_settings
 from fastapi.testclient import TestClient
-from metrics import ANALYSIS_COUNT, ANALYSIS_DURATION, MCP_TOOL_CALL_COUNT
+from metrics import (
+    ANALYSIS_COUNT,
+    ANALYSIS_DURATION,
+    LLM_CALL_COUNT,
+    MCP_TOOL_CALL_COUNT,
+)
 from moto import mock_aws
+from pydantic import BaseModel
 
 from app.health import build_health_app
+from app.llm_client import call_llm
 from app.mcp_clients import call_github_tool
 from app.runner import run_analysis
+
+
+class _Widget(BaseModel):
+    name: str
+
+
+def _fake_tool_use_response(payload: dict):
+    block = MagicMock()
+    block.type = "tool_use"
+    block.input = payload
+    response = MagicMock()
+    response.content = [block]
+    return response
 
 
 def _counter_value(counter, **labels) -> float:
@@ -66,6 +86,30 @@ async def test_call_github_tool_counts_error_status_on_terminal_failure():
     ):
         await call_github_tool("get_issue", owner="acme", repo="does-not-exist")
     after = _counter_value(MCP_TOOL_CALL_COUNT, tool="get_issue", status="error")
+    assert after == before + 1
+
+@pytest.mark.asyncio
+async def test_call_llm_increments_llm_call_count_on_success():
+    before = _counter_value(LLM_CALL_COUNT, status="success")
+    fake_client = MagicMock()
+    fake_client.messages.create = AsyncMock(return_value=_fake_tool_use_response({"name": "widget"}))
+    with patch("app.llm_client.AsyncAnthropic", return_value=fake_client):
+        await call_llm("system prompt", "user prompt", _Widget, "emit_widget")
+    after = _counter_value(LLM_CALL_COUNT, status="success")
+    assert after == before + 1
+
+@pytest.mark.asyncio
+async def test_call_llm_counts_error_status_on_failure():
+    before = _counter_value(LLM_CALL_COUNT, status="error")
+    fake_client = MagicMock()
+    fake_client.messages.create = AsyncMock(side_effect=RuntimeError("boom"))
+    with (
+        patch("app.llm_client.AsyncAnthropic", return_value=fake_client),
+        patch("retry.asyncio.sleep", new=AsyncMock()),
+        pytest.raises(RuntimeError, match="boom"),
+    ):
+        await call_llm("system prompt", "user prompt", _Widget, "emit_widget")
+    after = _counter_value(LLM_CALL_COUNT, status="error")
     assert after == before + 1
 
 @pytest.fixture
