@@ -6,6 +6,16 @@ on:
 jobs:
   build-and-push:
     runs-on: ubuntu-latest
+    # Repo's default_workflow_permissions is "read" (confirmed via the Actions API, not
+    # assumed) — GITHUB_TOKEN gets packages: read unless a job explicitly asks for more,
+    # which made `docker push` fail with "installation not allowed to Create organization
+    # package". Declaring `permissions:` at all resets every unlisted scope to none for this
+    # job, so contents: read has to be listed too, or actions/checkout below loses read
+    # access to the repo. Scoped to this job only (not workflow-level, not the deploy job,
+    # which never pushes packages) — least privilege.
+    permissions:
+      contents: read
+      packages: write
     strategy:
       matrix:
         include:

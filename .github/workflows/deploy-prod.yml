@@ -6,6 +6,15 @@ on:
 jobs:
   build-and-push:
     runs-on: ubuntu-latest
+    # Same fix as deploy-dev.yml: repo's default_workflow_permissions is "read" (confirmed
+    # via the Actions API), so GITHUB_TOKEN needs packages: write declared explicitly here or
+    # `docker push` fails with "installation not allowed to Create organization package".
+    # contents: read must be listed too — declaring `permissions:` resets every unlisted
+    # scope to none for this job, which would otherwise break actions/checkout below.
+    # Scoped to this job only, not the deploy job (never pushes packages).
+    permissions:
+      contents: read
+      packages: write
     strategy:
       matrix:
         include:
