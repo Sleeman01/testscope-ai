@@ -6,4 +6,7 @@ data:
   ENV: "prod"
   DYNAMODB_TABLE: "testscope-analyses-prod"
   S3_BUCKET: "testscope-reports-prod"
-  SQS_QUEUE_URL: "PASTE_FROM_TERRAFORM_OUTPUT_queue_url"
+  # kustomize's plain ConfigMap patch can't read a live Terraform output automatically — after
+  # `terraform apply` in terraform/environments/prod, run `terraform output queue_url` there and
+  # paste the result in below before applying this overlay.
+  SQS_QUEUE_URL: "REPLACE_WITH_TERRAFORM_OUTPUT_queue_url"
