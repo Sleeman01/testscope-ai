@@ -28,8 +28,7 @@ complete, merged to `main` via PR #16 code + PR #17 docs) → 8 (`CI/CD`, Tasks 
 merged to `main` via PR #18) → 9 (`observability`, Tasks 39–42, complete, merged to `main` via
 PR #19) → 10 (`local full-stack integration`, Task 43) — **Phase 10 ✅ complete, local E2E smoke
 test genuinely PASSED end-to-end (`status: completed`, verified by reading real output, not
-inferred) — pushed, not yet merged (PR left for the user to open/merge directly, per the
-standing Phase 7/8/9 preference).** Task 43 is the first task in the whole project to run every
+inferred) — merged to `main` via PR #21.** Task 43 is the first task in the whole project to run every
 service via its real Docker entrypoint and make real Claude/GitHub API calls simultaneously —
 that exposed five previously-undetected production bugs no earlier phase's mocked-boundary
 tests could reach: `backend/worker/Dockerfile`'s `CMD` (broken since Task 17 — `python
@@ -44,17 +43,25 @@ ported the k8s auth-proxy sidecar pattern into `docker-compose.yml` for the GitH
 replaced the plan's `octocat/Hello-World` smoke-test target with a purpose-built fixture issue
 (`Sleeman01/testscope-ai#20`) after confirming empirically that repo can never produce a
 `completed` result.
+**Post-Phase-10 CI/infra saga (PRs #22–27, undocumented by task number — see the dedicated
+entries at the end of the Phase Log below for full detail of each):** GHCR tag-casing and
+`packages: write` permission fixes, the `SQS_QUEUE_URL`/`AWS_DEFAULT_REGION` config gap,
+self-hosted runner + `production` Environment now genuinely live (real `deploy-prod.yml` runs
+against the real cluster), prod `api-hpa` `minReplicas` fix, prod CPU-request reduction for
+shared-node capacity, `SQS_QUEUE_URL` durability fix, and a kustomize multi-document patch split
+root-caused to a kubectl/kustomize version mismatch between the dev machine and the
+control-plane's actual pinned version. Both `dev` and `prod` are now fully live-deployed.
 **Branch pattern in use:** `feature/phase-<N>-<short-description>`, one PR per phase (docs-only
 housekeeping like this entry uses `docs/<short-description>` instead)
-**Current branch:** `docs/k8s-config-secrets-gap` (cut fresh from `main` after confirming via
-`gh pr list` that PR #23 had merged — local `main` was 2 commits behind at session start,
-fast-forwarded first). Docs/manifest-only fix (`AWS_DEFAULT_REGION` + self-documenting
-`SQS_QUEUE_URL` placeholders in `kubernetes/base|dev|prod`, `worker-secrets` creation command in
-`.github/workflows/README.md`) — see the "Post-Phase-10 housekeeping" entry at the end of the
-Phase Log below for full detail. Awaiting user's "go" before commit/push.
-**Last merged:** PR #23 (`fix/ghcr-packages-write-permission`, `packages: write` grant for
-build-and-push) → `main`, confirmed via `gh pr list` (also merged since: PR #22 lowercase GHCR
-tag fix, PR #21 Phase 10 local integration).
+**Current branch:** `docs/task-44-test-plan` (cut fresh from `main` after confirming via
+`gh pr list`/`git fetch` that PR #27 had merged — local `main` was 2 commits behind at session
+start, fast-forwarded first). Phase 11, Task 44 (`docs/test-plan.md`) pre-work: backfilled this
+file's Phase Log with PRs #25–27 (see those entries below), now drafting `docs/test-plan.md`
+itself.
+**Last merged:** PR #27 (`fix/prod-resources-patch-split`, kustomize patch split for the
+kubectl-version mismatch) → `main`, confirmed via `gh pr list`/`git fetch` (PRs #22–26 merged
+before it — see the Post-Phase-10 CI/infra saga note above and their individual Phase Log
+entries).
 **Session-start correction (Phase 9):** local `main` was 4 commits behind `origin/main` (the PR
 #18 merge happened upstream but hadn't been fetched locally). Confirmed via `gh pr list` (shown
 MERGED) before trusting it, then `git fetch origin` + `git checkout main` +
