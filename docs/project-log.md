@@ -2813,4 +2813,103 @@ cases, no duplication of each page's own already-existing coverage.
   fix is purely to the checked-in source so a from-scratch `dev` recreation no longer regresses;
   actually re-syncing live `dev` state (if it still differs from these files) is a separate,
   not-yet-requested step.
+
+### Prod `api-hpa` `minReplicas` fix (PR #25) — ✅ complete
+
+- **Branch:** `fix/prod-api-hpa-min-replicas`, cut from `main` after confirming PR #24
+  (`docs/k8s-config-secrets-gap`) merged upstream — same recurring session-start pattern as
+  every earlier phase.
+- **Real gap, not caught by any earlier task:** `kubernetes/prod/kustomization.yaml`'s
+  `replicas:` block sets `api` to `count: 2`, but `kubernetes/prod/hpa.yaml`'s `api-hpa` still
+  had `minReplicas: 1` — once the HPA's controller reconciles (which happens automatically,
+  not on a delay), it takes over the Deployment's replica count from whatever the manifest set
+  it to, so a low-CPU window right after a prod deploy could silently scale `api` back down to
+  1, undercutting the intended prod baseline of 2. `worker-hpa` is unaffected — `worker` is
+  pinned to 1 replica in both `dev` and `prod` by design, no HPA/manifest mismatch there.
+- **Fix:** `kubernetes/prod/hpa.yaml`'s `api-hpa.spec.minReplicas` → `2`, with an inline
+  comment explaining why (matches `kustomization.yaml`'s `replicas: 2` so the HPA's first
+  reconcile doesn't fight it). One-line change, `maxReplicas: 3` and the CPU-utilization
+  target untouched.
+- Validated via `kubectl kustomize kubernetes/prod` (renders `minReplicas: 2` correctly). No
+  live-cluster access from this environment — takes effect on the next `deploy-prod.yml` run.
+
+### Prod CPU-request reduction + SQS_QUEUE_URL durability fix (PR #26) — ✅ complete
+
+- **Branch:** `fix/prod-cpu-requests-and-sqs-durability`, cut from `main` after PR #25 merged.
+  Two independent real-infra findings, bundled into one PR since both surfaced from the same
+  round of live-cluster debugging.
+- **Finding 1 — prod's full stack doesn't fit on the shared worker node's CPU at the original
+  request levels, confirmed against real cluster data, not estimated:** `kubectl describe node`
+  on the single worker (§9's shared-cluster design — `dev`, `prod`, and `monitoring` all
+  schedule onto the same one worker node) showed `Allocated resources: cpu 2/2 (100%)`, zero
+  headroom, once both `dev`'s and `prod`'s stacks were live simultaneously. **Fixed by lowering
+  CPU *requests* only** (limits and all memory values untouched — this narrows the scheduling
+  floor, not the burst ceiling) for prod's `worker` (`250m→100m`), `mcp-github`
+  (`200m→120m`), and its `auth-proxy` sidecar (`50m→20m`). Implemented as
+  `kubernetes/prod/resources-patch.yaml` (a new two-document strategic-merge patch, one document
+  per Deployment), registered in `kustomization.yaml`'s `patches:` list, following the same
+  pattern already established by `configmap-patch.yaml`/`ingress-patch.yaml`. Validated via
+  `kubectl kustomize kubernetes/prod`. **This file was superseded three commits later by PR #27
+  below — see that entry; the two-document version never actually reached a real deploy
+  cleanly.**
+- **Finding 2 — `SQS_QUEUE_URL` reverted itself on every deploy, confirmed happening for real
+  twice in `dev`, not a theoretical risk:** the checked-in `SQS_QUEUE_URL` is a placeholder by
+  design (documented in the "Post-Phase-10 housekeeping" entry above — kustomize can't read a
+  live Terraform output at render time). What hadn't been accounted for: every push to `main`
+  (or a version tag) re-triggers `kubectl apply` with that same checked-in placeholder, silently
+  reverting any live `kubectl patch`/manual fix of the real queue URL back to the placeholder —
+  crash-looping `worker` with `QueueDoesNotExist` on its next poll. Happened for real twice in
+  `dev` before being root-caused as a durability gap rather than a one-off. **Fixed:** one more
+  `sed` substitution added to `deploy-dev.yml`/`deploy-prod.yml`'s existing single-pass render
+  step (same mechanism already used for the image-tag substitutions), sourced from a **repo
+  variable** (`vars.SQS_QUEUE_URL_DEV` / `vars.SQS_QUEUE_URL_PROD` — a variable, not a secret,
+  since the queue URL isn't sensitive on its own), populated once per environment from
+  `terraform output queue_url`. A guard clause (`if [ -z "${{ vars.SQS_QUEUE_URL_* }}" ]`) fails
+  the deploy loudly with `::error::` if the variable isn't set yet, instead of silently applying
+  an empty string into the rendered manifest.
+- Validated both workflow files parse as YAML (`yaml.safe_load`) and the embedded bash passes
+  `bash -n` with representative values substituted for the GitHub Actions expressions. No live
+  deploy run exercised this at PR time — first real exercise came via PR #27's tag-`v1.0.1`
+  deploy attempt below.
+- **Not part of any numbered task** — same as the two entries below, this is post-Phase-10
+  infra hardening surfaced by actually running the CI/CD pipeline against the live cluster, not
+  planned work from `plan.md`.
+
+### Prod kustomize multi-document patch split (PR #27) — ✅ complete
+
+- **Branch:** `fix/prod-resources-patch-split`, cut from `main` after PR #26 merged.
+- **Real CI failure, not found by any local check beforehand:** `deploy-prod.yml`'s `deploy` job
+  (triggered by tag `v1.0.1`) failed at the `kubectl kustomize kubernetes/prod` step with
+  `unable to parse SM or JSON patch` on `resources-patch.yaml` — the two-document file PR #26
+  added (`worker` + `mcp-github`, `---`-separated) registered as a single `patches:` entry.
+  **Root-caused by reproduction, not just inspection, and it's a version mismatch, not a
+  generic "kustomize doesn't support multi-doc patches" rule:** kustomize's `patches:` field
+  requires exactly one patch target per entry — but that two-document file had already validated
+  cleanly against this dev machine's local `kubectl kustomize` before merging PR #26, because
+  this machine runs kubectl v1.36.3 (bundled kustomize v5.8.1), which tolerates it. The
+  control-plane's actual pinned version does not: `terraform/modules/ec2/cloud-init-control-plane.yaml.tpl`
+  pins the `pkgs.k8s.io` **v1.30** apt channel, which bundles kustomize **v5.0.4** — a stricter
+  parser that rejects the combined file outright. Confirmed by downloading a real kubectl
+  v1.30.0 binary and reproducing the exact CI error locally *before* writing the fix, then
+  re-running the same binary against the fix to confirm it now succeeds.
+- **Fix:** split `kubernetes/prod/resources-patch.yaml` into `worker-resources-patch.yaml` and
+  `mcp-github-resources-patch.yaml`, each a single-document strategic-merge patch, registered as
+  two separate `kustomization.yaml` `patches:` entries instead of one. Same CPU-request values
+  as PR #26 (`worker` 100m, `mcp-github` 120m, `auth-proxy` 20m; limits/memory unchanged) — this
+  is a structural fix, not a value change. Each new file's header comment records the
+  version-mismatch root cause inline, so the next person editing a multi-Deployment patch in
+  this repo doesn't have to rediscover it.
+- **Validated with both kubectl versions, not just the one that had been missing the bug:**
+  kubectl v1.30.0 (matches the control-plane) and this machine's own v1.36.3 — both now exit 0,
+  and their rendered output is identical (confirmed via `diff`, not just "both succeeded").
+- **Standing lesson for this project's testing strategy, worth carrying into Task 44:** local
+  `kubectl kustomize`/`kubectl apply --dry-run` validation against whatever kubectl happens to
+  be installed on the dev machine is **not sufficient** to catch every real deploy-time failure
+  — the authoritative version is whatever the control-plane actually has pinned
+  (`cloud-init-control-plane.yaml.tpl`'s apt channel), and the two can silently diverge. No
+  earlier phase's Terraform/K8s validation step (Tasks 27–35) checked for or matched kubectl
+  versions between the dev machine and the deployed control-plane.
+- **Not part of any numbered task** — like PR #25/#26 above, this is infra hardening that only
+  surfaced from actually running `deploy-prod.yml` against the live cluster and a real version
+  tag, not from any planned Task 1–44 step.
 - Awaiting user's explicit "go" before commit/push, per this session's own instruction.
