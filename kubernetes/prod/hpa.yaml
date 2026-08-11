@@ -4,7 +4,9 @@ metadata:
   name: api-hpa
 spec:
   scaleTargetRef: { apiVersion: apps/v1, kind: Deployment, name: api }
-  minReplicas: 1
+  # 2, not 1 — matches kustomization.yaml's `replicas: 2` for prod's api Deployment, so the
+  # HPA's own first reconcile doesn't immediately scale it back down to 1.
+  minReplicas: 2
   maxReplicas: 3
   metrics: [{ type: Resource, resource: { name: cpu, target: { type: Utilization, averageUtilization: 70 } } }]
 ---
