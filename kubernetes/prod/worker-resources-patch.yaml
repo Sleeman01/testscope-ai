@@ -1,0 +1,22 @@
+# Live-capacity fix: the single worker node's allocatable CPU (2000m) is shared by dev's and
+# prod's full stacks — prod's worker CPU request was reduced (request only, limit unchanged)
+# to close the scheduling gap confirmed against real cluster data (Allocated resources: cpu
+# 2 (100%), zero headroom) rather than resizing the EC2 instance.
+# One patch target per file: kustomize's `patches:` field requires a single-document patch per
+# entry — a two-document file (worker + mcp-github combined) parses fine on newer kustomize
+# (v5.8.1, bundled with kubectl v1.36) but fails on the control-plane's actual kubectl v1.30
+# (bundles kustomize v5.0.4) with "unable to parse SM or JSON patch" — confirmed by reproducing
+# the exact CI failure locally against a matching kubectl v1.30 binary before this split.
+# Strategic-merge patch: `resources.requests` is a plain map, so specifying only `cpu` here
+# merges with base's `memory` value instead of replacing it — `limits` is untouched entirely.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: worker
+spec:
+  template:
+    spec:
+      containers:
+        - name: worker
+          resources:
+            requests: { cpu: 100m }

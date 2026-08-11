@@ -1,0 +1,19 @@
+# Live-capacity fix: see worker-resources-patch.yaml's comment for the full rationale and the
+# empirically-confirmed reason this is a separate file rather than one multi-document
+# resources-patch.yaml (kustomize's `patches:` field requires one patch target per entry; a
+# combined file parses on kustomize v5.8.1 but fails on the control-plane's actual kubectl
+# v1.30 / kustomize v5.0.4 with "unable to parse SM or JSON patch").
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mcp-github
+spec:
+  template:
+    spec:
+      containers:
+        - name: mcp-github
+          resources:
+            requests: { cpu: 120m }
+        - name: auth-proxy
+          resources:
+            requests: { cpu: 20m }
