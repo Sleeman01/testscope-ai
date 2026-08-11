@@ -8,9 +8,9 @@ from dynamodb import AnalysisStore
 from metrics import ANALYSIS_COUNT, ANALYSIS_DURATION
 from models import AnalysisRecord
 
-from app.graph import build_graph
-from app.mcp_clients import call_test_mcp_tool
-from app.nodes.job_intake import job_intake
+from worker_app.graph import build_graph
+from worker_app.mcp_clients import call_test_mcp_tool
+from worker_app.nodes.job_intake import job_intake
 
 logger = logging.getLogger(__name__)
 
@@ -24,14 +24,20 @@ async def run_analysis(analysis_id: str, repository: str, issue_number: int, not
     }
     try:
         state = job_intake(state, store)
-    except Exception:
+    except Exception as exc:
         # design.md §4: "Malformed message → log, ack, skip (no infinite redrive)." Job
         # Intake couldn't even record status=running, so there's nothing meaningful to run
         # the graph against, clean up, or finalize — log and return rather than let this
         # propagate uncaught (main.py's poll loop has nothing wrapping
         # asyncio.run(run_analysis(...)), so an uncaught exception here previously crashed
         # the whole worker process on a single bad job instead of just skipping it).
-        logger.exception("job_intake failed for analysis_id=%s; skipping job", analysis_id)
+        logger.exception(
+            "job_intake failed for analysis_id=%s; skipping job", analysis_id,
+            extra={
+                "analysis_id": analysis_id, "repository": repository, "issue_number": issue_number,
+                "node": "job_intake", "status": "failed", "error_type": type(exc).__name__,
+            },
+        )
         return
     start_time = time.time()
     try:
@@ -40,7 +46,14 @@ async def run_analysis(analysis_id: str, repository: str, issue_number: int, not
         state["status"] = "failed"
         state["error_message"] = "analysis timed out"
     except Exception as exc:
-        logger.exception("Graph execution failed for analysis_id=%s", analysis_id)
+        logger.exception(
+            "Graph execution failed for analysis_id=%s", analysis_id,
+            extra={
+                "analysis_id": analysis_id, "repository": repository, "issue_number": issue_number,
+                "node": "graph", "status": "failed", "error_type": type(exc).__name__,
+                "duration": time.time() - start_time,
+            },
+        )
         state["status"] = "failed"
         state["error_message"] = str(exc)
     finally:
@@ -55,10 +68,17 @@ async def run_analysis(analysis_id: str, repository: str, issue_number: int, not
         ANALYSIS_COUNT.labels(status=state.get("status", "failed")).inc()
         try:
             await call_test_mcp_tool("cleanup_workspace", analysis_id=analysis_id)
-        except Exception:
+        except Exception as exc:
             # Best-effort cleanup only — a failed workspace cleanup shouldn't fail the
             # whole finally block or block the final upsert below, just get logged.
-            logger.warning("cleanup_workspace failed for analysis_id=%s (non-fatal)", analysis_id, exc_info=True)
+            logger.warning(
+                "cleanup_workspace failed for analysis_id=%s (non-fatal)", analysis_id, exc_info=True,
+                extra={
+                    "analysis_id": analysis_id, "repository": repository, "issue_number": issue_number,
+                    "tool": "cleanup_workspace", "status": state.get("status", "failed"),
+                    "error_type": type(exc).__name__, "duration": time.time() - start_time,
+                },
+            )
         try:
             now = datetime.now(UTC).isoformat()
             store.upsert(AnalysisRecord(
@@ -70,9 +90,16 @@ async def run_analysis(analysis_id: str, repository: str, issue_number: int, not
                 missing_tests_count=len(state.get("missing_tests", [])),
                 tool_call_trace=state.get("tool_call_trace", []),
             ))
-        except Exception:
+        except Exception as exc:
             # Same "log, ack, skip" reasoning as job_intake's own handling above — the
             # analysis already ran (or timed out/errored) by this point, so the SQS message
             # should still be ack'd rather than redelivered; a failed final write shouldn't
             # crash the worker or leave the record stuck at status=running forever.
-            logger.exception("Final AnalysisRecord upsert failed for analysis_id=%s", analysis_id)
+            logger.exception(
+                "Final AnalysisRecord upsert failed for analysis_id=%s", analysis_id,
+                extra={
+                    "analysis_id": analysis_id, "repository": repository, "issue_number": issue_number,
+                    "status": state.get("status", "failed"), "error_type": type(exc).__name__,
+                    "duration": time.time() - start_time,
+                },
+            )

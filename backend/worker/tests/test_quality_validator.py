@@ -1,4 +1,4 @@
-from app.nodes.quality_validator import quality_validator
+from worker_app.nodes.quality_validator import quality_validator
 
 
 def test_strips_fabricated_evidence_not_in_candidate_files():

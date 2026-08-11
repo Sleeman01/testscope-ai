@@ -10,6 +10,7 @@ from mcp.server import MCPServer
 from prometheus_client import make_asgi_app
 
 from github_client import GithubClient
+from mcp_logging import configure_json_logging
 from mcp_metrics import instrument_tool
 from sweeper import start_sweeper
 from tools.cleanup_workspace import cleanup_workspace as _cleanup_workspace
@@ -85,6 +86,7 @@ def _start_health_server(port: int = 8101):
     uvicorn.run(build_health_app(), host="0.0.0.0", port=port, log_level="warning")
 
 if __name__ == "__main__":
+    configure_json_logging()
     start_sweeper(WORKSPACE_ROOT, interval_seconds=900, max_age_seconds=3600)
     threading.Thread(target=_start_health_server, daemon=True).start()
     mcp.run(

@@ -13,10 +13,10 @@ data:
   # design.md/plan.md text alone):
   #
   # - API Request Rate: testscope_api_requests_total{method,path,status} (API_REQUEST_COUNT,
-  #   backend/shared/metrics.py) -- incremented on every request via backend/api/app/main.py's
+  #   backend/shared/metrics.py) -- incremented on every request via backend/api/api_app/main.py's
   #   middleware (Task 39). `by (status)` is valid: status is a declared label. OK.
   # - Analysis Success/Fail Rate: testscope_analyses_total{status} (ANALYSIS_COUNT) --
-  #   incremented once per terminal outcome in backend/worker/app/runner.py's finally block
+  #   incremented once per terminal outcome in backend/worker/worker_app/runner.py's finally block
   #   (moved there from report_saver.py in commit 967acc5, specifically so this label can
   #   show both "completed" and "failed" -- before that fix, report_saver unconditionally
   #   set status="completed" and this panel could never show a failure). OK.
@@ -44,16 +44,35 @@ data:
   #   wouldn't anyway). This panel will read "No data" until/unless kube-state-metrics is
   #   deployed as its own, separately-scoped addition -- flagged, not fixed here, same as
   #   the already-flagged mcp-github probe/scrape gaps.
-  # - Recent Failed Analyses (logs): LogQL `|= "status=failed"` against Loki -- NOT
-  #   confirmed to match anything: grepped every logger.exception/logger.warning call across
-  #   backend/ and mcp-server/ and none of them emit structured output or the literal
-  #   substring "status=failed" (design.md §12 calls for "structured JSON" logs with a
-  #   "final status" field, but no task through Task 40 has ever implemented a JSON log
-  #   formatter -- confirmed via a repo-wide grep, not assumed). Kept as the plan's literal
-  #   query text rather than silently substituted with something that happens to match
-  #   today's plain-string log output (e.g. a bare `|= "failed"`) -- that's a logging-format
-  #   decision, not a dashboard-authoring one, and belongs to whoever adds structured
-  #   logging, not to this task. This panel will also read "No data" until that exists.
+  # - Recent Failed Analyses (logs): post-Phase-11 hardening item 3. LogQL now
+  #   `| json | status="failed"` against Loki, matching backend/shared/logging_utils.py's
+  #   JsonLogFormatter (mirrored locally as mcp-server/mcp_logging.py, same reasoning as
+  #   mcp_metrics.py -- mcp-server can't depend on backend/shared) -- every JSON log line
+  #   this formatter emits that includes a `status` field is a real top-level JSON key, so
+  #   Loki's `| json` parser stage extracts it directly rather than the old literal-substring
+  #   match (`|= "status=failed"`), which nothing ever emitted. Wired into worker_app (10
+  #   real failure-path logger.exception/.warning call sites now carry status="failed" plus
+  #   whichever of analysis_id/repository/issue_number/node/tool/duration/error_type
+  #   genuinely apply at that call site -- non-fatal/non-terminal warnings deliberately omit
+  #   `status`, e.g. requirement_retriever's comments-fetch fallback), api_app, and
+  #   mcp-server's real entrypoints -- but api_app and mcp-server currently have zero
+  #   application-level logger.* calls of their own (their errors either become HTTPExceptions
+  #   or propagate back to worker_app's own call sites, which already log them), so the
+  #   formatter is correctly wired there but has nothing to emit yet.
+  #   request_id (design.md §12's field list) has no source anywhere in this codebase -- no
+  #   per-API-request or per-job correlation ID beyond analysis_id exists -- so it's a
+  #   supported-but-always-absent field, not fabricated. retry_count is the same: retry.py's
+  #   with_retry() doesn't return how many attempts it actually made, so no call site can
+  #   honestly populate it without changing that function's contract -- left out rather than
+  #   guessed (e.g. hardcoding 3, which would be wrong for a terminal/non-retryable error
+  #   that fails on the first attempt).
+  #   mcp-github/auth-proxy is stock nginx (official image, templated config, no app code in
+  #   this repo) -- not a Python service, nothing to apply a logging.Formatter to; skipped.
+  #   Separately, real bug found while verifying this: promtail.yaml's scrape_config never
+  #   attached a `namespace` label to anything (static_configs + a bare /var/log/pods glob,
+  #   no pipeline_stages) -- `{namespace=~"dev|prod"}` would have matched zero streams
+  #   regardless of the logging-format fix above. Fixed there (cri + regex + labels stages),
+  #   see that file's own header comment.
   testscope.json: |
     {
       "title": "TestScope AI — System Health",
@@ -67,6 +86,6 @@ data:
         { "title": "MCP Tool Latency by Tool", "type": "timeseries", "targets": [{ "expr": "histogram_quantile(0.95, sum(rate(testscope_mcp_tool_duration_seconds_bucket[15m])) by (le, tool))" }] },
         { "title": "MCP Tool Errors by Tool", "type": "timeseries", "targets": [{ "expr": "sum(rate(testscope_mcp_tool_calls_total{status=\"error\"}[15m])) by (tool)" }] },
         { "title": "Pod Restarts", "type": "timeseries", "targets": [{ "expr": "sum(kube_pod_container_status_restarts_total{namespace=~\"dev|prod\"}) by (pod)" }] },
-        { "title": "Recent Failed Analyses (logs)", "type": "logs", "datasource": "Loki", "targets": [{ "expr": "{namespace=~\"dev|prod\"} |= \"status=failed\"" }] }
+        { "title": "Recent Failed Analyses (logs)", "type": "logs", "datasource": "Loki", "targets": [{ "expr": "{namespace=~\"dev|prod\"} | json | status=\"failed\"" }] }
       ]
     }

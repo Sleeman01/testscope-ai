@@ -1,6 +1,6 @@
 from fastapi.testclient import TestClient
 
-from app.main import create_app
+from api_app.main import create_app
 
 
 def test_metrics_endpoint_exposes_request_count(monkeypatch):

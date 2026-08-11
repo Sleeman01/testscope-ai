@@ -25,7 +25,7 @@ def client(monkeypatch):
         sqs.create_queue(QueueName="q")
         s3 = boto3.client("s3", region_name="us-east-1")
         s3.create_bucket(Bucket="testscope-reports-test")
-        from app.main import create_app
+        from api_app.main import create_app
         yield TestClient(create_app())
 
 def test_returns_404_for_unknown_id(client):

@@ -1,5 +1,6 @@
 from anthropic import AsyncAnthropic
 from config import get_settings
+from metrics import LLM_CALL_COUNT
 from pydantic import BaseModel
 
 from retry import with_retry
@@ -39,7 +40,15 @@ async def call_llm(system_prompt: str, user_prompt: str, response_model: type[Ba
             tool_choice={"type": "tool", "name": tool_name},
         )
 
-    response = await with_retry(_do_call, max_attempts=3, backoff_base=1.0)
+    status = "success"
+    try:
+        response = await with_retry(_do_call, max_attempts=3, backoff_base=1.0)
+    except Exception:
+        status = "error"
+        raise
+    finally:
+        LLM_CALL_COUNT.labels(status=status).inc()
+
     tool_use = next(block for block in response.content if block.type == "tool_use")
     payload = tool_use.input["entries"] if is_array_schema else tool_use.input
     return response_model.model_validate(payload)

@@ -3,7 +3,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from config import get_settings
 
-from app.mcp_clients import (
+from worker_app.mcp_clients import (
     _is_retryable_tool_error,
     call_github_tool,
     call_test_mcp_tool,
@@ -37,7 +37,7 @@ async def test_retries_transient_tool_error_then_succeeds():
         if calls["count"] < 2:
             raise TimeoutError("connection reset")
         return {"default_branch": "main"}
-    with patch("app.mcp_clients._call_once", new=AsyncMock(side_effect=fake_call_once)):
+    with patch("worker_app.mcp_clients._call_once", new=AsyncMock(side_effect=fake_call_once)):
         result = await call_github_tool("get_repository", owner="acme", repo="widgets")
     assert result == {"default_branch": "main"}
     assert calls["count"] == 2
@@ -49,7 +49,7 @@ async def test_does_not_retry_not_found_error():
         calls["count"] += 1
         raise RuntimeError("404 Not Found")
     with (
-        patch("app.mcp_clients._call_once", new=AsyncMock(side_effect=fake_call_once)),
+        patch("worker_app.mcp_clients._call_once", new=AsyncMock(side_effect=fake_call_once)),
         pytest.raises(RuntimeError, match="404"),
     ):
         await call_github_tool("get_repository", owner="acme", repo="does-not-exist")
@@ -77,8 +77,8 @@ async def test_call_once_parses_json_text_payload_over_the_real_mcp_transport():
     transport_cm = AsyncMock()
     transport_cm.__aenter__.return_value = (AsyncMock(), AsyncMock())
 
-    with patch("app.mcp_clients.streamable_http_client", return_value=transport_cm), \
-         patch("app.mcp_clients.ClientSession", return_value=session_cm):
+    with patch("worker_app.mcp_clients.streamable_http_client", return_value=transport_cm), \
+         patch("worker_app.mcp_clients.ClientSession", return_value=session_cm):
         result = await call_github_tool("get_repository", owner="acme", repo="widgets")
 
     assert result == {"default_branch": "main"}
@@ -93,6 +93,6 @@ async def test_call_test_mcp_tool_routes_to_the_test_analysis_mcp_url():
     async def fake_call_once(base_url, tool_name, kwargs):
         assert base_url == "unused-in-this-test"
         return {"tests": []}
-    with patch("app.mcp_clients._call_once", new=AsyncMock(side_effect=fake_call_once)):
+    with patch("worker_app.mcp_clients._call_once", new=AsyncMock(side_effect=fake_call_once)):
         result = await call_test_mcp_tool("extract_test_metadata", path="tests/test_x.py")
     assert result == {"tests": []}

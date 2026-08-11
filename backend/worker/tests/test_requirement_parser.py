@@ -2,7 +2,7 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
-from app.nodes.requirement_parser import (
+from worker_app.nodes.requirement_parser import (
     AcceptanceCriterion,
     Requirement,
     requirement_parser,
@@ -19,7 +19,7 @@ async def test_extracts_structured_requirement():
         acceptance_criteria=[AcceptanceCriterion(id="AC1", text="Invalid password returns 401")],
         validation_rules=[], user_roles=["user"], constraints=[], gaps=[],
     )
-    with patch("app.nodes.requirement_parser.call_llm", new=AsyncMock(return_value=stub_result)):
+    with patch("worker_app.nodes.requirement_parser.call_llm", new=AsyncMock(return_value=stub_result)):
         result = await requirement_parser(state)
     assert result["requirement"]["feature_name"] == "Login"
     assert len(result["requirement"]["acceptance_criteria"]) == 1
@@ -33,7 +33,7 @@ async def test_terminates_gracefully_when_no_criteria_found():
         acceptance_criteria=[], validation_rules=[], user_roles=[], constraints=[],
         gaps=["No acceptance criteria stated in the issue"],
     )
-    with patch("app.nodes.requirement_parser.call_llm", new=AsyncMock(return_value=stub_result)):
+    with patch("worker_app.nodes.requirement_parser.call_llm", new=AsyncMock(return_value=stub_result)):
         result = await requirement_parser(state)
     assert result["status"] == "failed"
     assert "acceptance criteria" in result["error_message"].lower()

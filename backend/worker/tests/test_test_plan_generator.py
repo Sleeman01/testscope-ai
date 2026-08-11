@@ -2,7 +2,7 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
-from app.nodes.test_plan_generator import TestCase, TestPlan, test_plan_generator
+from worker_app.nodes.test_plan_generator import TestCase, TestPlan, test_plan_generator
 
 # The imported node function's name matches pytest's test_* discovery glob — without
 # this, pytest tries to collect and run it directly as a test case too (see Task 13's
@@ -23,6 +23,6 @@ async def test_generates_scenarios_across_categories():
                                     preconditions=["user exists"], steps=["POST /api/login with wrong password"],
                                     test_data="password=wrong", expected_result="401 response",
                                     type="negative", priority="high", automation_recommendation="automate via pytest")])
-    with patch("app.nodes.test_plan_generator.call_llm", new=AsyncMock(return_value=stub)):
+    with patch("worker_app.nodes.test_plan_generator.call_llm", new=AsyncMock(return_value=stub)):
         result = await test_plan_generator(state)
     assert result["test_plan"][0]["type"] == "negative"

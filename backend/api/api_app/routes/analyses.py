@@ -7,7 +7,7 @@ from fastapi import APIRouter, status
 from models import AnalysisRecord
 from sqs import JobQueue
 
-from app.schemas import CreateAnalysisRequest, CreateAnalysisResponse
+from api_app.schemas import CreateAnalysisRequest, CreateAnalysisResponse
 
 router = APIRouter(prefix="/api/analyses")
 
@@ -30,7 +30,7 @@ def create_analysis(payload: CreateAnalysisRequest):
 
 from fastapi import HTTPException
 
-from app.schemas import AnalysisListResponse, AnalysisStatusResponse
+from api_app.schemas import AnalysisListResponse, AnalysisStatusResponse
 
 
 def _to_status_response(record) -> AnalysisStatusResponse:
@@ -54,7 +54,7 @@ def list_analyses(repository: str | None = None, issue_number: int | None = None
 
 from s3 import ReportStore
 
-from app.schemas import ReportResponse
+from api_app.schemas import ReportResponse
 
 
 def _report_store() -> ReportStore:
@@ -75,8 +75,8 @@ def get_report(analysis_id: str):
         download_url=report_store.presigned_url(record.s3_report_key.replace(".json", ".md")),
     )
 
-from app.mcp_client import call_github_tool
-from app.schemas import GithubIssueResponse
+from api_app.mcp_client import call_github_tool
+from api_app.schemas import GithubIssueResponse
 
 
 @router.post("/{analysis_id}/github-issue", response_model=GithubIssueResponse)

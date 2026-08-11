@@ -2,14 +2,17 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from app.nodes.requirement_retriever import _fetch_issue_body, requirement_retriever
+from worker_app.nodes.requirement_retriever import (
+    _fetch_issue_body,
+    requirement_retriever,
+)
 
 
 @pytest.mark.asyncio
 async def test_retrieves_issue_body_and_comments():
     state = {"repository": "acme/widgets", "issue_number": 42, "tool_call_trace": [], "warnings": []}
-    with patch("app.nodes.requirement_retriever._fetch_issue_body", new=AsyncMock(return_value="Add login")), \
-         patch("app.nodes.requirement_retriever.call_github_tool",
+    with patch("worker_app.nodes.requirement_retriever._fetch_issue_body", new=AsyncMock(return_value="Add login")), \
+         patch("worker_app.nodes.requirement_retriever.call_github_tool",
                new=AsyncMock(return_value=[{"body": "clarification"}])):
         result = await requirement_retriever(state)
     assert result["issue_body"] == "Add login"
@@ -18,8 +21,8 @@ async def test_retrieves_issue_body_and_comments():
 @pytest.mark.asyncio
 async def test_falls_back_to_body_only_when_comments_fail():
     state = {"repository": "acme/widgets", "issue_number": 42, "tool_call_trace": [], "warnings": []}
-    with patch("app.nodes.requirement_retriever._fetch_issue_body", new=AsyncMock(return_value="Add login")), \
-         patch("app.nodes.requirement_retriever.call_github_tool",
+    with patch("worker_app.nodes.requirement_retriever._fetch_issue_body", new=AsyncMock(return_value="Add login")), \
+         patch("worker_app.nodes.requirement_retriever.call_github_tool",
                new=AsyncMock(side_effect=Exception("comments API failed"))):
         result = await requirement_retriever(state)
     assert result["issue_body"] == "Add login"
@@ -32,7 +35,7 @@ async def test_fails_gracefully_when_issue_body_fetch_fails():
     # (design.md §4's Requirement Retriever row only covers comments-fetch failure) —
     # mirrors request_validator's own explicit catch-and-fail pattern.
     state = {"repository": "acme/widgets", "issue_number": 42, "tool_call_trace": [], "warnings": []}
-    with patch("app.nodes.requirement_retriever._fetch_issue_body",
+    with patch("worker_app.nodes.requirement_retriever._fetch_issue_body",
                new=AsyncMock(side_effect=Exception("404 Not Found"))):
         result = await requirement_retriever(state)
     assert result["status"] == "failed"
@@ -54,7 +57,7 @@ async def test_fetch_issue_body_calls_the_real_github_rest_api(monkeypatch):
     client_cm = AsyncMock()
     client_cm.__aenter__.return_value = client
 
-    with patch("app.nodes.requirement_retriever.httpx2.AsyncClient", return_value=client_cm) as mock_client_cls:
+    with patch("worker_app.nodes.requirement_retriever.httpx2.AsyncClient", return_value=client_cm) as mock_client_cls:
         body = await _fetch_issue_body("acme", "widgets", 42)
 
     assert body == "Add login"

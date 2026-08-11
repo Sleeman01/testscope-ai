@@ -6,7 +6,7 @@ from config import get_settings
 from dynamodb import AnalysisStore
 from moto import mock_aws
 
-from app.runner import run_analysis
+from worker_app.runner import run_analysis
 
 
 @pytest.fixture
@@ -82,14 +82,14 @@ async def test_full_pipeline_reaches_completed_status(full_env):
     # (as plan.md's own snippet does) has no effect on any node's calls — confirmed by
     # running it that way first and observing real (failing) Anthropic/MCP calls instead of
     # the stubs. Every node that imports these must be patched at its own import site.
-    with patch("app.nodes.requirement_parser.call_llm", new=AsyncMock(side_effect=fake_call_llm)), \
-         patch("app.nodes.test_search_planner.call_llm", new=AsyncMock(side_effect=fake_call_llm)), \
-         patch("app.nodes.coverage_analyzer.call_llm", new=AsyncMock(side_effect=fake_call_llm)), \
-         patch("app.nodes.test_plan_generator.call_llm", new=AsyncMock(side_effect=fake_call_llm)), \
-         patch("app.nodes.missing_test_recommender.call_llm", new=AsyncMock(side_effect=fake_call_llm)), \
-         patch("app.nodes.request_validator.call_github_tool", new=AsyncMock(side_effect=fake_search_repositories)), \
-         patch("app.nodes.requirement_retriever._fetch_issue_body", new=AsyncMock(side_effect=fake_fetch_issue_body)), \
-         patch("app.nodes.requirement_retriever.call_github_tool", new=AsyncMock(side_effect=fake_issue_read_comments)):
+    with patch("worker_app.nodes.requirement_parser.call_llm", new=AsyncMock(side_effect=fake_call_llm)), \
+         patch("worker_app.nodes.test_search_planner.call_llm", new=AsyncMock(side_effect=fake_call_llm)), \
+         patch("worker_app.nodes.coverage_analyzer.call_llm", new=AsyncMock(side_effect=fake_call_llm)), \
+         patch("worker_app.nodes.test_plan_generator.call_llm", new=AsyncMock(side_effect=fake_call_llm)), \
+         patch("worker_app.nodes.missing_test_recommender.call_llm", new=AsyncMock(side_effect=fake_call_llm)), \
+         patch("worker_app.nodes.request_validator.call_github_tool", new=AsyncMock(side_effect=fake_search_repositories)), \
+         patch("worker_app.nodes.requirement_retriever._fetch_issue_body", new=AsyncMock(side_effect=fake_fetch_issue_body)), \
+         patch("worker_app.nodes.requirement_retriever.call_github_tool", new=AsyncMock(side_effect=fake_issue_read_comments)):
         await run_analysis(analysis_id="e2e-1", repository="acme/widgets", issue_number=42, notes=None)
 
     store = AnalysisStore(table_name="testscope-analyses-test")

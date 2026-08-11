@@ -1,13 +1,15 @@
 import time
 
 from fastapi import FastAPI, Request
+from logging_utils import configure_json_logging
 from metrics import API_REQUEST_COUNT, API_REQUEST_LATENCY
 from prometheus_client import make_asgi_app
 
-from app.routes import analyses, health
+from api_app.routes import analyses, health
 
 
 def create_app() -> FastAPI:
+    configure_json_logging()
     app = FastAPI(title="TestScope AI API")
 
     @app.middleware("http")

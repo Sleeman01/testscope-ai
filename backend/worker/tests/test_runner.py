@@ -6,7 +6,7 @@ from config import get_settings
 from dynamodb import AnalysisStore
 from moto import mock_aws
 
-from app.runner import run_analysis
+from worker_app.runner import run_analysis
 
 
 @pytest.fixture
@@ -41,8 +41,8 @@ async def test_run_analysis_marks_failed_and_still_cleans_up_on_graph_exception(
     # try/except/finally), so it's worth a dedicated, fast, fully-mocked test rather than
     # leaving it uncovered: a hung/crashed graph must still mark the analysis failed and
     # still attempt cleanup, not leave the job stuck or skip cleanup entirely.
-    with patch("app.runner._graph") as mock_graph, \
-         patch("app.runner.call_test_mcp_tool", new=AsyncMock(side_effect=Exception("cleanup also unreachable"))) as mock_cleanup:
+    with patch("worker_app.runner._graph") as mock_graph, \
+         patch("worker_app.runner.call_test_mcp_tool", new=AsyncMock(side_effect=Exception("cleanup also unreachable"))) as mock_cleanup:
         mock_graph.ainvoke = AsyncMock(side_effect=RuntimeError("boom"))
         await run_analysis(analysis_id="r1", repository="acme/widgets", issue_number=1, notes=None)
 
@@ -58,7 +58,7 @@ async def test_run_analysis_logs_and_returns_when_job_intake_fails(store_env, ca
     # asyncio.run(run_analysis(...)) either — an uncaught exception here previously
     # propagated all the way out and would crash the whole worker process on a single bad
     # job, instead of design.md's stated "log, ack, skip" behavior for Job Intake failures.
-    with patch("app.runner.job_intake", side_effect=RuntimeError("job_intake boom")), \
+    with patch("worker_app.runner.job_intake", side_effect=RuntimeError("job_intake boom")), \
          caplog.at_level("ERROR"):
         await run_analysis(analysis_id="r2", repository="acme/widgets", issue_number=1, notes=None)
 
@@ -83,8 +83,8 @@ async def test_run_analysis_logs_and_returns_when_final_upsert_fails(store_env, 
             return real_upsert(self, record)  # job_intake's own upsert succeeds normally
         raise RuntimeError("final upsert boom")
 
-    with patch("app.runner._graph") as mock_graph, \
-         patch("app.runner.call_test_mcp_tool", new=AsyncMock(return_value={})), \
+    with patch("worker_app.runner._graph") as mock_graph, \
+         patch("worker_app.runner.call_test_mcp_tool", new=AsyncMock(return_value={})), \
          patch.object(AnalysisStore, "upsert", new=flaky_upsert), \
          caplog.at_level("ERROR"):
         mock_graph.ainvoke = AsyncMock(return_value={

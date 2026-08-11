@@ -2,14 +2,14 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
-from app.nodes.request_validator import request_validator
+from worker_app.nodes.request_validator import request_validator
 
 
 @pytest.mark.asyncio
 async def test_sets_default_branch_on_success():
     state = {"repository": "acme/widgets", "tool_call_trace": [], "warnings": []}
     with patch(
-        "app.nodes.request_validator.call_github_tool",
+        "worker_app.nodes.request_validator.call_github_tool",
         new=AsyncMock(return_value={"items": [{"default_branch": "main", "size": 100}]}),
     ):
         result = await request_validator(state)
@@ -22,7 +22,7 @@ async def test_fails_gracefully_when_search_returns_zero_items():
     # surfaces as an empty items list, not an exception (design.md §5.2).
     state = {"repository": "acme/does-not-exist", "tool_call_trace": [], "warnings": []}
     with patch(
-        "app.nodes.request_validator.call_github_tool",
+        "worker_app.nodes.request_validator.call_github_tool",
         new=AsyncMock(return_value={"items": []}),
     ):
         result = await request_validator(state)
@@ -33,7 +33,7 @@ async def test_fails_gracefully_when_search_returns_zero_items():
 async def test_fails_gracefully_on_tool_error():
     state = {"repository": "acme/does-not-exist", "tool_call_trace": [], "warnings": []}
     with patch(
-        "app.nodes.request_validator.call_github_tool",
+        "worker_app.nodes.request_validator.call_github_tool",
         new=AsyncMock(side_effect=Exception("403 access denied")),
     ):
         result = await request_validator(state)

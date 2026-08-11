@@ -2,7 +2,7 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
-from app.nodes.missing_test_recommender import (
+from worker_app.nodes.missing_test_recommender import (
     MissingTest,
     MissingTests,
     missing_test_recommender,
@@ -17,6 +17,6 @@ async def test_recommends_missing_scenarios_for_gaps():
     stub = MissingTests(root=[MissingTest(behavior="401 on invalid password", why_it_matters="security boundary",
                                            suggested_type="negative", suggested_priority="high",
                                            related_criterion_id="AC1", risk="unauthorized access if unverified")])
-    with patch("app.nodes.missing_test_recommender.call_llm", new=AsyncMock(return_value=stub)):
+    with patch("worker_app.nodes.missing_test_recommender.call_llm", new=AsyncMock(return_value=stub)):
         result = await missing_test_recommender(state)
     assert result["missing_tests"][0]["related_criterion_id"] == "AC1"
