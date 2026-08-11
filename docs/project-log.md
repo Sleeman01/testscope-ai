@@ -2919,4 +2919,40 @@ cases, no duplication of each page's own already-existing coverage.
 - **Not part of any numbered task** — like PR #25/#26 above, this is infra hardening that only
   surfaced from actually running `deploy-prod.yml` against the live cluster and a real version
   tag, not from any planned Task 1–44 step.
-- Awaiting user's explicit "go" before commit/push, per this session's own instruction.
+
+### `kubernetes/prod/smoke-test.sh` timeout bump (Task 44 pre-work) — ✅ complete, diagnosed before fixing
+
+- **Branch:** `docs/task-44-test-plan` (this branch — Task 44 pre-work uncovered this, it isn't
+  its own PR).
+- **Trigger:** tag `v1.0.2`'s `deploy-prod.yml` run (triggered while re-confirming this file's
+  own "Infrastructure verification" citations for Task 44) failed at the `Smoke test` step:
+  `kubectl -n prod wait --for=condition=available --timeout=120s deployment/api deployment/worker
+  deployment/frontend deployment/mcp-test-analysis deployment/mcp-github` reported
+  `deployment.apps/api condition met` followed by `timed out waiting for the condition` on the
+  other four. The preceding `kubectl apply` step itself succeeded cleanly (every resource
+  `configured`/`unchanged`, confirming PR #27's kustomize fix genuinely holds) — the failure was
+  isolated to the post-apply wait, not the apply itself.
+- **Diagnosed before touching anything, not assumed:** four hypotheses were checked in parallel
+  (missing/stale `github-token`/`worker-secrets` Secrets, an image-pull failure specific to a
+  non-`api` service, a probe-config difference explaining why only `api` passed, and whether PR
+  #26's CPU-request cuts were simply still too small) against the real `v1.0.2` build-and-push
+  logs (all 4 images pushed real `v1.0.2` digests — ruled out image push) and the manifests
+  (`api`/`frontend` reference no Secret at all, ruling Secrets in as at most a partial
+  explanation). **User then confirmed live cluster state directly** (`kubectl -n prod get
+  pods`/`get deployments`): every Deployment Running/Ready — `api` 2/2, `worker`/`frontend`/
+  `mcp-github`/`mcp-test-analysis` all 1/1 Available. **Verdict: transient, not a real defect.**
+  All 5 Deployments picked up a new pod-template hash simultaneously in this apply (the
+  version-tag `sed` substitution touches `api`/`worker`/`mcp-test-analysis`/`frontend`'s image on
+  every tagged deploy; `mcp-github` picked up PR #27's own resource-patch split) — triggering a
+  simultaneous 5-Deployment rolling-update surge (Kubernetes' default `RollingUpdate` strategy
+  creates a new pod before removing the old one, even for single-replica Deployments) under the
+  thinner-than-before CPU-request headroom PR #26 deliberately left. `api` (applied first,
+  untouched by the CPU cuts) cleared the 120s wait; the other four needed longer than 120s for a
+  cold multi-image pull plus the scheduling squeeze, not because anything was actually broken.
+- **Fix:** `kubernetes/prod/smoke-test.sh`'s `kubectl wait --timeout` raised `120s → 300s`, with
+  an inline comment recording the mechanism above so the next person doesn't have to re-diagnose
+  it. `kubernetes/dev/smoke-test.sh` left at `120s` — `dev` doesn't carry PR #26's CPU-request
+  cuts, so it doesn't face the same squeeze.
+- **Not part of any numbered task**, same as PRs #25–27 above — surfaced only by actually
+  re-running the live deploy pipeline while gathering citations for Task 44, not from any planned
+  step.
