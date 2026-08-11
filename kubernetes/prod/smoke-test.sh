@@ -14,7 +14,7 @@ HOST="${2:-testscope.local}"
 # minutes later showed every Deployment Running/Ready — the work finished, the wait didn't).
 kubectl -n "$NAMESPACE" wait --for=condition=available --timeout=300s deployment/api deployment/worker deployment/frontend deployment/mcp-test-analysis deployment/mcp-github
 
-response=$(curl -s -o /dev/null -w "%{http_code}" "http://$HOST/api/health/live")
+response=$(curl -s -o /dev/null -w "%{http_code}" --retry 3 --retry-delay 2 --retry-connrefused "http://$HOST/api/health/live")
 if [ "$response" != "200" ]; then
   echo "Smoke test failed: /api/health/live returned $response"
   exit 1
