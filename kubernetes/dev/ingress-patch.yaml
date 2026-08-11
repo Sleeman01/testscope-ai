@@ -10,3 +10,13 @@ spec:
           - path: /
             pathType: Prefix
             backend: { service: { name: frontend, port: { number: 80 } } }
+    # Public dev access via the worker node's Elastic IP (eipalloc-0a8be1f1bba9ba557,
+    # 184.73.108.151), encoded as a nip.io hostname. This IP is now static — an Elastic
+    # IP, not the worker's default ephemeral public IP — so it won't change on
+    # instance stop/start.
+    - host: 184.73.108.151.nip.io
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend: { service: { name: frontend, port: { number: 80 } } }
