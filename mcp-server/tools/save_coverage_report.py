@@ -34,14 +34,24 @@ def save_coverage_report(analysis_id, repository, issue_number, requirement, cov
 
     covered = sum(1 for r in coverage_matrix if r["status"] == "Covered")
     total = len(coverage_matrix) or 1
+    percent_covered = round(100 * covered / total, 1)
     table = get_dynamodb_table()
     table.put_item(Item={
         "analysis_id": analysis_id, "repository": repository, "issue_number": issue_number,
         "repository_issue": f"{repository}#{issue_number}", "gsi2_pk": "ANALYSIS",
         "status": status, "created_at": now, "updated_at": now,
         "requirement_summary": requirement.get("feature_name", ""),
-        "coverage_summary": {"percent_covered": Decimal(str(round(100 * covered / total, 1)))},
+        "coverage_summary": {"percent_covered": Decimal(str(percent_covered))},
         "missing_tests_count": len(missing_tests),
         "s3_report_key": f"{s3_key}.json", "tool_call_trace": tool_call_trace,
     })
-    return {"s3_report_key": f"{s3_key}.json", "dynamodb_status": "saved"}
+    # Returned alongside s3_report_key so the worker's report_saver node can carry it
+    # through AgentState — the worker's own final AnalysisRecord upsert (runner.py) does a
+    # full DynamoDB item replace and would otherwise clobber the value just written above
+    # back to null, since it has no other way to know what was computed here. Plain float,
+    # not the Decimal used for the DynamoDB item: this crosses back to the worker as JSON
+    # tool-response text, which can't serialize Decimal.
+    return {
+        "s3_report_key": f"{s3_key}.json", "dynamodb_status": "saved",
+        "coverage_summary": {"percent_covered": percent_covered},
+    }

@@ -35,6 +35,7 @@ async def report_saver(state: dict) -> dict:
             test_plan=state["test_plan"], status=state["status"], tool_call_trace=state.get("tool_call_trace", []),
         )
         state["s3_report_key"] = result["s3_report_key"]
+        state["coverage_summary"] = result["coverage_summary"]
         state["storage_status"] = "saved"
     except Exception as exc:
         # storage_status="failed" here, not status: this node only runs after every

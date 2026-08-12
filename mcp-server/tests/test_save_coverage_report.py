@@ -43,3 +43,25 @@ def test_writes_dynamodb_item_and_s3_report(aws_env):
     assert json.loads(body)["status"] == "completed"
     md = s3.get_object(Bucket="testscope-reports-test", Key="acme/widgets/42/a1.md")["Body"].read().decode()
     assert "Login" in md
+
+def test_returns_coverage_summary_matching_persisted_value(aws_env):
+    # Real bug: this return value used to omit coverage_summary entirely, even though it's
+    # computed and persisted directly to DynamoDB here. The worker's own final upsert
+    # (runner.py) does a full item replace and had nothing to carry this value forward with,
+    # silently clobbering it back to null immediately after this write.
+    from tools.save_coverage_report import save_coverage_report
+    result = save_coverage_report(
+        analysis_id="a2", repository="acme/widgets", issue_number=42,
+        requirement={"feature_name": "Login"},
+        coverage_matrix=[
+            {"criterion_id": "AC1", "status": "Covered"},
+            {"criterion_id": "AC2", "status": "Not covered"},
+        ],
+        missing_tests=[], test_plan=[], status="completed", tool_call_trace=[],
+    )
+    assert result["coverage_summary"] == {"percent_covered": 50.0}
+
+    import boto3
+    ddb = boto3.resource("dynamodb", region_name="us-east-1")
+    item = ddb.Table("testscope-analyses-test").get_item(Key={"analysis_id": "a2"})["Item"]
+    assert float(item["coverage_summary"]["percent_covered"]) == 50.0

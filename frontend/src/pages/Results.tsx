@@ -89,7 +89,7 @@ export function Results() {
           {status.requirement_summary && <p className="card-subtitle">{status.requirement_summary}</p>}
         </div>
         <div className="coverage-stat">
-          <span className="coverage-stat-value">{status.coverage_summary?.percent_covered}%</span>
+          <span className="coverage-stat-value">{status.coverage_summary?.percent_covered ?? "-"}%</span>
           <span className="coverage-stat-label">Coverage</span>
         </div>
       </div>
@@ -157,7 +157,6 @@ export function Results() {
         >
           Create GitHub issue
         </button>
-        <a href={report.download_url} className="btn btn-outline">Download report</a>
       </div>
       {finalIssueUrl && (
         <p className="issue-link">
