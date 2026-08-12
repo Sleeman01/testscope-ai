@@ -32,3 +32,8 @@ class AgentState(TypedDict):
     # sets this (Task 43 fix) but it was never declared here, so the state key was silently
     # dropped and runner.py's final AnalysisRecord always got s3_report_key=None.
     s3_report_key: str | None
+    # Same trap again: report_saver.py sets this from save_coverage_report's return value,
+    # but it was never declared here, so runner.py's final AnalysisRecord always got
+    # coverage_summary=None — the frontend's coverage percentage rendered as a bare "%"
+    # because the persisted value was always null, not because of a frontend field-name bug.
+    coverage_summary: dict | None

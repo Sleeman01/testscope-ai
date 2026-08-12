@@ -5,7 +5,6 @@ import pytest
 from config import get_settings
 from dynamodb import AnalysisStore
 from moto import mock_aws
-
 from worker_app.runner import run_analysis
 
 
@@ -95,3 +94,25 @@ async def test_run_analysis_logs_and_returns_when_final_upsert_fails(store_env, 
 
     assert "final upsert boom" in caplog.text
     assert "r3" in caplog.text
+
+@pytest.mark.asyncio
+async def test_run_analysis_persists_coverage_summary_from_graph_state(store_env):
+    # Real bug: report_saver's mcp tool call computes and persists coverage_summary
+    # directly to DynamoDB (mcp-server/tools/save_coverage_report.py), but this finally
+    # block's own store.upsert(...) does a full item replace right afterward and, without
+    # this fix, has nothing to carry coverage_summary forward with — silently clobbering it
+    # back to null immediately after report_saver had just written the real value. This is
+    # why the frontend's coverage percentage renders as a bare "%": the field is correct
+    # end-to-end, but the value at rest in DynamoDB was always null.
+    with patch("worker_app.runner._graph") as mock_graph, \
+         patch("worker_app.runner.call_test_mcp_tool", new=AsyncMock(return_value={})):
+        mock_graph.ainvoke = AsyncMock(return_value={
+            "analysis_id": "r4", "repository": "acme/widgets", "issue_number": 1,
+            "status": "completed", "tool_call_trace": [], "warnings": [], "missing_tests": [],
+            "coverage_summary": {"percent_covered": 75.0},
+        })
+        await run_analysis(analysis_id="r4", repository="acme/widgets", issue_number=1, notes=None)
+
+    store = AnalysisStore(table_name="t")
+    record = store.get("r4")
+    assert record.coverage_summary == {"percent_covered": 75.0}
