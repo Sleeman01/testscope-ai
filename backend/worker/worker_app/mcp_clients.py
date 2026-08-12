@@ -10,7 +10,18 @@ from retry import with_retry
 
 TERMINAL_MARKERS = ("404", "not found", "403", "access denied", "422", "invalid")
 
+
+class McpNonJsonResponseError(RuntimeError):
+    """An MCP tool call returned a non-JSON payload — an application-level failure
+    (e.g. a malformed query rejected by the upstream server), not a transport error.
+    Retrying an identical request produces the identical response, so this is always
+    non-retryable regardless of whether its message happens to contain a TERMINAL_MARKERS
+    substring."""
+
+
 def _is_retryable_tool_error(exc: Exception) -> bool:
+    if isinstance(exc, McpNonJsonResponseError):
+        return False
     message = str(exc).lower()
     return not any(marker in message for marker in TERMINAL_MARKERS)
 
@@ -25,7 +36,15 @@ async def _call_once(base_url: str, tool_name: str, kwargs: dict) -> dict:
         # (design.md §5.2) — parse the JSON text payload instead, same as
         # mcp-server/github_client.py.
         text = next(b.text for b in result.content if getattr(b, "text", None))
-        return json.loads(text)
+        try:
+            return json.loads(text)
+        except json.JSONDecodeError as exc:
+            # Otherwise indistinguishable from a transport failure once anyio wraps it
+            # in nested ExceptionGroups — surface the actual body so the real cause
+            # (e.g. a malformed query rejected upstream) is visible.
+            raise McpNonJsonResponseError(
+                f"Non-JSON response from MCP tool {tool_name!r}: {text[:200]!r}",
+            ) from exc
 
 async def _call(base_url: str, tool_name: str, **kwargs) -> dict:
     # Task 39's plan snippet reimplements this whole function around a bare

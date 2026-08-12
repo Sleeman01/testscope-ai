@@ -35,3 +35,23 @@ def test_create_analysis_does_not_dedupe_concurrent_requests(client):
     r1 = client.post("/api/analyses", json={"repository": "acme/widgets", "issue_number": 42})
     r2 = client.post("/api/analyses", json={"repository": "acme/widgets", "issue_number": 42})
     assert r1.json()["analysis_id"] != r2.json()["analysis_id"]  # stated v1 limitation, spec §7
+
+def test_create_analysis_normalizes_github_url_to_owner_repo(client):
+    response = client.post(
+        "/api/analyses",
+        json={"repository": "https://github.com/acme/widgets.git", "issue_number": 42},
+    )
+    assert response.status_code == 202
+    analysis_id = response.json()["analysis_id"]
+
+    stored = client.get(f"/api/analyses/{analysis_id}")
+
+    assert stored.json()["repository"] == "acme/widgets"
+
+def test_create_analysis_rejects_invalid_repository(client):
+    response = client.post(
+        "/api/analyses",
+        json={"repository": "not-a-repo", "issue_number": 42},
+    )
+    assert response.status_code == 422
+    assert "Invalid repository" in response.text

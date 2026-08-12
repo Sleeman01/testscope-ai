@@ -1,10 +1,16 @@
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
+from repository import normalize_repository
 
 
 class CreateAnalysisRequest(BaseModel):
     repository: str
     issue_number: int
     notes: str | None = None
+
+    @field_validator("repository")
+    @classmethod
+    def _normalize_repository(cls, value: str) -> str:
+        return normalize_repository(value)
 
 class CreateAnalysisResponse(BaseModel):
     analysis_id: str
