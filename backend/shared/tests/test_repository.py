@@ -1,4 +1,5 @@
 import pytest
+
 from repository import InvalidRepositoryError, normalize_repository
 
 
