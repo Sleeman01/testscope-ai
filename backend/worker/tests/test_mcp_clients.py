@@ -2,8 +2,8 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from config import get_settings
-
 from worker_app.mcp_clients import (
+    McpNonJsonResponseError,
     _is_retryable_tool_error,
     call_github_tool,
     call_test_mcp_tool,
@@ -60,6 +60,49 @@ def test_classifier_treats_terminal_markers_as_non_retryable():
     assert _is_retryable_tool_error(Exception("403 access denied")) is False
     assert _is_retryable_tool_error(TimeoutError("connection timed out")) is True
     assert _is_retryable_tool_error(Exception("500 Internal Server Error")) is True
+
+def test_classifier_treats_non_json_response_as_non_retryable():
+    # A malformed-query error (e.g. from a bad search string) comes back as a non-JSON
+    # body with no "404"/"403"/etc marker in it — retrying the identical malformed
+    # request 3 times is pointless, since it'll fail the same way every time.
+    assert _is_retryable_tool_error(McpNonJsonResponseError("boom")) is False
+
+@pytest.mark.asyncio
+async def test_call_once_raises_readable_error_on_non_json_response():
+    # Real bug: a non-JSON response used to hit json.loads(text) directly, indistinguishable
+    # from a transport failure once anyio wrapped it in nested ExceptionGroups — cost hours
+    # of debugging. The raised error must surface the actual response body.
+    session = AsyncMock()
+    session.initialize = AsyncMock()
+    session.call_tool = AsyncMock(
+        return_value=_fake_result("<html>502 Bad Gateway from upstream proxy</html>"),
+    )
+    session_cm = AsyncMock()
+    session_cm.__aenter__.return_value = session
+
+    transport_cm = AsyncMock()
+    transport_cm.__aenter__.return_value = (AsyncMock(), AsyncMock())
+
+    with patch("worker_app.mcp_clients.streamable_http_client", return_value=transport_cm), \
+         patch("worker_app.mcp_clients.ClientSession", return_value=session_cm), \
+         pytest.raises(McpNonJsonResponseError) as exc_info:
+        await call_github_tool("search_repositories", query="repo:acme/widgets")
+
+    assert "search_repositories" in str(exc_info.value)
+    assert "502 Bad Gateway" in str(exc_info.value)
+
+@pytest.mark.asyncio
+async def test_non_json_response_is_not_retried():
+    calls = {"count": 0}
+    async def fake_call_once(base_url, tool_name, kwargs):
+        calls["count"] += 1
+        raise McpNonJsonResponseError("non-JSON response from tool 'x': 'oops'")
+    with (
+        patch("worker_app.mcp_clients._call_once", new=AsyncMock(side_effect=fake_call_once)),
+        pytest.raises(McpNonJsonResponseError),
+    ):
+        await call_github_tool("search_repositories", query="repo:acme/widgets")
+    assert calls["count"] == 1
 
 @pytest.mark.asyncio
 async def test_call_once_parses_json_text_payload_over_the_real_mcp_transport():

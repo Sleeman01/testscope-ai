@@ -12,4 +12,4 @@ requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"
 
 [tool.setuptools]
-py-modules = ["config", "dynamodb", "logging_utils", "metrics", "models", "s3", "sqs"]
+py-modules = ["config", "dynamodb", "logging_utils", "metrics", "models", "repository", "s3", "sqs"]

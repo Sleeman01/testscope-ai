@@ -3,13 +3,25 @@
 # found" repo surfaces as a zero-item result rather than a tool-level error.
 import logging
 
+from repository import InvalidRepositoryError, normalize_repository
+
 from worker_app.mcp_clients import call_github_tool
 
 logger = logging.getLogger(__name__)
 
 
 async def request_validator(state: dict) -> dict:
-    owner, repo = state["repository"].split("/", 1)
+    # Defensive even though backend/api's CreateAnalysisRequest already normalizes
+    # repository input at request time — a malformed value here (e.g. a raw GitHub URL)
+    # used to reach a bare `.split("/", 1)`, producing a nonsense MCP search query whose
+    # non-JSON error response then raised deep inside anyio's TaskGroup, hiding the real
+    # cause. Fail cleanly here regardless of what upstream guarantees.
+    try:
+        owner, repo = normalize_repository(state["repository"]).split("/", 1)
+    except InvalidRepositoryError as exc:
+        state["status"] = "failed"
+        state["error_message"] = str(exc)
+        return state
     try:
         result = await call_github_tool(
             "search_repositories", query=f"repo:{owner}/{repo}", minimal_output=False,
