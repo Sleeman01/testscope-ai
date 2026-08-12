@@ -5,6 +5,7 @@ from config import get_settings
 from mcp import ClientSession
 from mcp.client.streamable_http import streamable_http_client
 from metrics import MCP_TOOL_CALL_COUNT, MCP_TOOL_LATENCY
+
 from retry import with_retry
 
 TERMINAL_MARKERS = ("404", "not found", "403", "access denied", "422", "invalid")

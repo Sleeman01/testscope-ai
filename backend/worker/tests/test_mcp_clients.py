@@ -2,6 +2,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from config import get_settings
+
 from worker_app.mcp_clients import (
     McpNonJsonResponseError,
     _is_retryable_tool_error,
