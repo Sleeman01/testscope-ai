@@ -22,6 +22,8 @@ spec:
           env:
             - name: ANTHROPIC_API_KEY
               valueFrom: { secretKeyRef: { name: worker-secrets, key: anthropic-api-key } }
+            - name: GITHUB_TOKEN
+              valueFrom: { secretKeyRef: { name: github-token, key: token } }
           resources:
             requests: { cpu: 250m, memory: 512Mi }
             limits: { cpu: 1000m, memory: 1Gi }
