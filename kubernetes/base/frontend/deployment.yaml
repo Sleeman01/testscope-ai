@@ -8,6 +8,8 @@ spec:
   template:
     metadata: { labels: { app: frontend } }
     spec:
+      imagePullSecrets:
+        - name: ghcr-pull-secret
       containers:
         - name: frontend
           image: ghcr.io/testscope-ai/frontend:latest

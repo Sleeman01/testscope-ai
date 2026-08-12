@@ -8,6 +8,8 @@ spec:
   template:
     metadata: { labels: { app: mcp-github } }
     spec:
+      imagePullSecrets:
+        - name: ghcr-pull-secret
       containers:
         - name: mcp-github
           image: ghcr.io/github/github-mcp-server:latest

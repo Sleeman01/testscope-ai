@@ -12,6 +12,8 @@ spec:
       # first-port behavior here (worker only declares 8080), added for consistency.
       annotations: { prometheus.io/scrape: "true", prometheus.io/port: "8080" }
     spec:
+      imagePullSecrets:
+        - name: ghcr-pull-secret
       containers:
         - name: worker
           image: ghcr.io/testscope-ai/worker:latest

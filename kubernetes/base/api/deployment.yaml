@@ -15,6 +15,8 @@ spec:
       # would be wrong (see that Deployment's own comment).
       annotations: { prometheus.io/scrape: "true", prometheus.io/port: "8000" }
     spec:
+      imagePullSecrets:
+        - name: ghcr-pull-secret
       containers:
         - name: api
           image: ghcr.io/testscope-ai/api:latest
