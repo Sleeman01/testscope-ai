@@ -16,6 +16,8 @@ spec:
       # /metrics on. Explicit port override so the correct one (8101) gets scraped.
       annotations: { prometheus.io/scrape: "true", prometheus.io/port: "8101" }
     spec:
+      imagePullSecrets:
+        - name: ghcr-pull-secret
       containers:
         - name: mcp-test-analysis
           image: ghcr.io/testscope-ai/mcp-test-analysis:latest
