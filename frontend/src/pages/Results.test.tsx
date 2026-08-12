@@ -29,6 +29,24 @@ describe("Results", () => {
     renderAt("a1");
     await waitFor(() => expect(screen.getByText(/not covered/i)).toBeInTheDocument());
     expect(screen.getByText(/401 on bad password/i)).toBeInTheDocument();
-    expect(screen.getByRole("link", { name: /download report/i })).toHaveAttribute("href", "https://example.com/report.md");
+    expect(screen.queryByRole("link", { name: /download report/i })).not.toBeInTheDocument();
+    expect(screen.getByText("50%")).toBeInTheDocument();
+  });
+
+  it("renders a dash instead of a bare '%' when coverage_summary is null", async () => {
+    vi.spyOn(client, "getAnalysis").mockResolvedValue({
+      analysis_id: "a2", repository: "acme/widgets", issue_number: 42, status: "completed",
+      created_at: "", updated_at: "", requirement_summary: "Login",
+      coverage_summary: null, missing_tests_count: 0,
+      error_message: null, github_issue_url: null,
+    });
+    vi.spyOn(client, "getReport").mockResolvedValue({
+      analysis_id: "a2", requirement: { feature_name: "Login" },
+      coverage_matrix: [], test_plan: [], missing_tests: [],
+      tool_call_trace: [], download_url: "https://example.com/report.md",
+    });
+    renderAt("a2");
+    await waitFor(() => expect(screen.getByText("acme/widgets#42")).toBeInTheDocument());
+    expect(screen.getByText("-%")).toBeInTheDocument();
   });
 });
