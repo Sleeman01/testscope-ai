@@ -9,6 +9,11 @@ patches:
   - path: ingress-patch.yaml
   - path: worker-resources-patch.yaml
   - path: mcp-github-resources-patch.yaml
+  - path: worker-rollout-patch.yaml
+  - path: api-rollout-patch.yaml
+  - path: frontend-rollout-patch.yaml
+  - path: mcp-test-analysis-rollout-patch.yaml
+  - path: mcp-github-rollout-patch.yaml
 replicas:
   - name: api
     count: 1

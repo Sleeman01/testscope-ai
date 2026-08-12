@@ -1,0 +1,24 @@
+# Deadlock fix: dev's default RollingUpdate strategy (25% surge/unavailable, rounded up to 1
+# pod for a single-replica Deployment) tries to schedule the *new* pod before tearing down the
+# old one. The old pod still holds its resource requests during that overlap window, and the
+# single worker node's allocatable capacity has no room for both generations at once — the new
+# pod sits Pending ("Insufficient cpu"/"Insufficient memory") forever, so the old pod (still
+# healthy) never gets replaced and the rollout deadlocks permanently. Real utilisation is
+# single-digit percent; this is purely reserved-request pressure during the overlap, not an
+# actual capacity shortage — see worker-resources-patch.yaml for the separate, already-applied
+# fix to the requests themselves, which reduces but doesn't eliminate this overlap risk.
+# Recreate tears down the old pod before creating the new one, at the cost of a brief outage per
+# deploy (however long the new pod takes to become Ready) — acceptable for a dev/demo cluster,
+# not something to carry into prod without the same tradeoff discussion.
+# One patch target per file, matching worker-resources-patch.yaml's established convention:
+# kustomize's `patches:` field requires a single-document patch per entry — a combined
+# multi-document file parses on newer kustomize (v5.8.1) but fails on the control-plane's
+# actual kubectl v1.30 (kustomize v5.0.4) with "unable to parse SM or JSON patch" (confirmed
+# the hard way in prod via PR #27).
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: worker
+spec:
+  strategy:
+    type: Recreate

@@ -1,0 +1,10 @@
+# Deadlock fix: see worker-rollout-patch.yaml for the full rationale — same single-node
+# capacity pressure applies to every single-replica Deployment sharing this dev cluster, not
+# just worker.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: api
+spec:
+  strategy:
+    type: Recreate
