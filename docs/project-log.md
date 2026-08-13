@@ -2984,3 +2984,24 @@ cases, no duplication of each page's own already-existing coverage.
   of the post-Phase-10 CI/infra saga, not new work; Task 44 (`docs/test-plan.md`) can now cite
   a real, verified green run for both `dev` and `prod` instead of describing the pipeline only
   in aspirational/design terms.
+
+### `backend/worker` ruff import-sort fix (PR #42) — ✅ complete
+
+- **Branch:** `fix/worker-ruff-import-sort`, cut fresh from `main` (at `ffa4273`, PR #40) —
+  not part of the numbered Task 1–44 sequence. Note: **PR #41** (`feature/frontend-dark-mode-
+  redesign`, a separate frontend visual-redesign branch also cut from `ffa4273`) was open in
+  parallel at the time of this fix; that branch's own project-log update is larger and
+  independent of this one, so this entry only touches the Phase Log tail, not "Current State,"
+  to avoid a merge conflict between the two PRs on this file.
+- **Trigger:** user reported a CI failure — `cd backend/worker && ruff check .` → 2 `I001`
+  (unsorted import block) findings in `tests/test_report_saver.py` and `tests/test_runner.py`.
+  Reproduced empirically before fixing (`.venv` activated, confirmed `which python` resolved
+  inside it per this project's standing rule) — output matched the pasted CI log exactly.
+- **Fix:** `ruff check . --fix` — verified via `git diff` that the change is a pure
+  import-block reordering (one blank line inserted in each file, matching ruff's own suggested
+  diff), nothing else touched. Matches this project's Phase 8 standing decision: real findings
+  get fixed with a real (if mechanical) change, not suppressed.
+- **Verified:** `ruff check .` clean (`All checks passed!`); `python -m pytest -q` in
+  `backend/worker` 52/52 passing (suite has grown since Phase 3's 38/38 baseline — expected,
+  not a regression).
+- **Outcome:** pushed, PR #42 opened by Claude at the user's explicit request ("push").
