@@ -34,6 +34,6 @@ describe("App routing", () => {
     vi.spyOn(client, "listAnalyses").mockResolvedValue({ analyses: [] });
     renderAt("/history");
     await waitFor(() => expect(client.listAnalyses).toHaveBeenCalled());
-    expect(screen.getByRole("columnheader", { name: /repository/i })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: /analysis history/i })).toBeInTheDocument();
   });
 });

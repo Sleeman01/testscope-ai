@@ -1,8 +1,26 @@
 import { useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { Loader2 } from "lucide-react";
+import { CircleDot, ClipboardList, FlaskConical, Loader2 } from "lucide-react";
 import { motion } from "framer-motion";
 import { createAnalysis } from "../api/client";
+
+const HOW_IT_WORKS = [
+  {
+    Icon: CircleDot,
+    label: "Reads the issue",
+    description: "Pulls the GitHub issue and its acceptance criteria.",
+  },
+  {
+    Icon: FlaskConical,
+    label: "Inspects the tests",
+    description: "Scans the repo's test suite for relevant coverage.",
+  },
+  {
+    Icon: ClipboardList,
+    label: "Reports the gaps",
+    description: "Flags missing scenarios and generates a test plan.",
+  },
+];
 
 export function Home() {
   const [repository, setRepository] = useState("");
@@ -23,14 +41,19 @@ export function Home() {
   }
 
   return (
-    <div className="mx-auto flex max-w-2xl flex-col gap-5 px-5 py-6 pb-12">
-      <div className="rounded-2xl border border-border bg-surface/60 p-5 shadow-sm backdrop-blur-md">
-        <h1 className="text-2xl font-bold tracking-tight text-text">TestScope AI</h1>
-        <p className="mt-1 text-text-secondary">
+    <div className="mx-auto flex max-w-2xl flex-col gap-6 px-5 py-6 pb-12">
+      {/* Hero */}
+      <div>
+        <h1 className="text-3xl font-bold tracking-tight text-text">TestScope AI</h1>
+        <p className="mt-2 text-text-secondary">
           Point this at a GitHub issue and get back a test coverage matrix, missing scenarios, and a
           ready-to-file follow-up issue.
         </p>
-        <form onSubmit={handleSubmit} className="mt-5 flex flex-col gap-4">
+      </div>
+
+      {/* Form card */}
+      <div className="rounded-2xl border border-border bg-surface p-6">
+        <form onSubmit={handleSubmit} className="flex flex-col gap-4">
           <div className="flex flex-col gap-2">
             <label htmlFor="repository" className="text-sm font-semibold text-text-secondary">
               Repository (owner/repo)
@@ -79,7 +102,7 @@ export function Home() {
             disabled={submitting}
             whileHover={{ scale: 1.02 }}
             whileTap={{ scale: 0.98 }}
-            className="inline-flex items-center justify-center gap-2 rounded-md bg-gradient-to-r from-indigo-500 to-violet-600 px-4 py-3 text-sm font-semibold text-white shadow-sm transition-shadow hover:shadow-lg hover:shadow-indigo-500/20 disabled:cursor-not-allowed disabled:opacity-60"
+            className="inline-flex items-center justify-center gap-2 rounded-md bg-accent px-4 py-3 text-sm font-semibold text-white transition-colors hover:bg-accent/90 disabled:cursor-not-allowed disabled:opacity-60"
           >
             {submitting ? (
               <>
@@ -91,6 +114,17 @@ export function Home() {
             )}
           </motion.button>
         </form>
+      </div>
+
+      {/* How it works */}
+      <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
+        {HOW_IT_WORKS.map(({ Icon, label, description }) => (
+          <div key={label} className="rounded-xl bg-surface p-5">
+            <Icon className="h-5 w-5 text-text-secondary" aria-hidden="true" />
+            <p className="mt-3 text-sm font-semibold text-text">{label}</p>
+            <p className="mt-1 text-sm text-text-secondary">{description}</p>
+          </div>
+        ))}
       </div>
     </div>
   );
