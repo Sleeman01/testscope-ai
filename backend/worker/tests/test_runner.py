@@ -5,6 +5,7 @@ import pytest
 from config import get_settings
 from dynamodb import AnalysisStore
 from moto import mock_aws
+
 from worker_app.runner import run_analysis
 
 
