@@ -30,12 +30,3 @@
   --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
   --font-mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
 }
-
-/* Legacy chrome tokens — still consumed by Layout.css until Task 3 removes both together.
-   Values unchanged from before this redesign (the header was already dark). */
-:root {
-  --color-chrome-bg: #14141f;
-  --color-chrome-text: #eeedf8;
-  --color-chrome-text-muted: #9a97b8;
-  --color-chrome-border: #24243a;
-}
