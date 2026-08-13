@@ -10,7 +10,8 @@ import {
 import { motion } from "framer-motion";
 import { getAnalysis, getReport, createGithubIssue } from "../api/client";
 import type { AnalysisStatus, Report } from "../api/types";
-import { StatusBadge, classify, type Variant } from "../components/StatusBadge";
+import { StatusBadge } from "../components/StatusBadge";
+import { classifyStatus, type StatusBadgeVariant } from "../components/statusBadgeUtils";
 import { Button } from "../components/ui/Button";
 import { Card } from "../components/ui/Card";
 import { PageContainer } from "../components/ui/PageContainer";
@@ -29,7 +30,7 @@ const MotionButton = motion.create(Button);
 const RING_RADIUS = 40;
 const RING_CIRCUMFERENCE = 2 * Math.PI * RING_RADIUS;
 
-const ROW_ICONS: Record<Variant, { Icon: typeof CheckCircle2; classes: string }> = {
+const ROW_ICONS: Record<StatusBadgeVariant, { Icon: typeof CheckCircle2; classes: string }> = {
   success: { Icon: CheckCircle2, classes: "bg-success/15 text-success" },
   warning: { Icon: MinusCircle, classes: "bg-warning/15 text-warning" },
   danger: { Icon: XCircle, classes: "bg-danger/15 text-danger" },
@@ -136,7 +137,7 @@ export function Results() {
 
   const counts = { success: 0, warning: 0, danger: 0 };
   for (const row of coverageMatrix) {
-    const variant = classify(row.status);
+    const variant = classifyStatus(row.status);
     if (variant === "success" || variant === "warning" || variant === "danger") {
       counts[variant] += 1;
     }
@@ -224,7 +225,7 @@ export function Results() {
         <SectionHeader title="Coverage Matrix" />
         <div className="flex flex-col gap-3">
           {coverageMatrix.map((row, i) => {
-            const variant = classify(row.status);
+            const variant = classifyStatus(row.status);
             const { Icon, classes } = ROW_ICONS[variant];
             return (
               <motion.div

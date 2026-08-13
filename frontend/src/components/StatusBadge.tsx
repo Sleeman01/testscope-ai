@@ -1,18 +1,8 @@
 import { CheckCircle2, XCircle, AlertTriangle, Clock, Circle, type LucideIcon } from "lucide-react";
 import { cn } from "../lib/cn";
+import { classifyStatus, type StatusBadgeVariant } from "./statusBadgeUtils";
 
-export type Variant = "success" | "danger" | "warning" | "progress" | "neutral";
-
-export function classify(raw: string): Variant {
-  const s = raw.toLowerCase();
-  if (s.includes("not covered") || s.includes("fail") || s.includes("missing")) return "danger";
-  if (s.includes("partial")) return "warning";
-  if (s.includes("covered") || s.includes("pass") || s.includes("completed")) return "success";
-  if (s.includes("pending") || s.includes("running") || s.includes("progress")) return "progress";
-  return "neutral";
-}
-
-const ICONS: Record<Variant, LucideIcon> = {
+const ICONS: Record<StatusBadgeVariant, LucideIcon> = {
   success: CheckCircle2,
   danger: XCircle,
   warning: AlertTriangle,
@@ -20,7 +10,7 @@ const ICONS: Record<Variant, LucideIcon> = {
   neutral: Circle,
 };
 
-const VARIANT_CLASSES: Record<Variant, string> = {
+const VARIANT_CLASSES: Record<StatusBadgeVariant, string> = {
   success: "bg-success/15 text-success",
   danger: "bg-danger/15 text-danger",
   warning: "bg-warning/15 text-warning",
@@ -29,7 +19,7 @@ const VARIANT_CLASSES: Record<Variant, string> = {
 };
 
 export function StatusBadge({ status }: { status: string }) {
-  const variant = classify(status);
+  const variant = classifyStatus(status);
   const Icon = ICONS[variant];
   return (
     <span
