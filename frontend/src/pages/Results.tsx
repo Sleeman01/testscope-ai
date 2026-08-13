@@ -1,5 +1,7 @@
 import { useEffect, useState } from "react";
 import { useParams } from "react-router-dom";
+import { AlertCircle, AlertTriangle, Loader2 } from "lucide-react";
+import { motion } from "framer-motion";
 import { getAnalysis, getReport, createGithubIssue } from "../api/client";
 import type { AnalysisStatus, Report } from "../api/types";
 import { StatusBadge } from "../components/StatusBadge";
@@ -43,9 +45,9 @@ export function Results() {
 
   if (!status) {
     return (
-      <div className="page-narrow">
-        <div className="state-panel">
-          <span className="spinner spinner-lg" aria-hidden="true" />
+      <div className="mx-auto flex max-w-2xl flex-col gap-5 px-5 py-6 pb-12">
+        <div className="flex flex-col items-center justify-center gap-4 py-12 text-center text-text-secondary">
+          <Loader2 className="h-8 w-8 animate-spin text-accent" aria-hidden="true" />
           <p>Loading...</p>
         </div>
       </div>
@@ -54,13 +56,10 @@ export function Results() {
 
   if (status.status === "failed") {
     return (
-      <div className="page-narrow">
-        <div className="card state-panel state-panel-error">
-          <svg className="state-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.75" strokeLinecap="round" strokeLinejoin="round">
-            <circle cx="12" cy="12" r="9" />
-            <path d="M9 9l6 6M15 9l-6 6" />
-          </svg>
-          <h2>Analysis failed</h2>
+      <div className="mx-auto flex max-w-2xl flex-col gap-5 px-5 py-6 pb-12">
+        <div className="flex flex-col items-center justify-center gap-4 rounded-2xl border border-border bg-surface/60 p-8 text-center text-danger backdrop-blur-md">
+          <AlertCircle className="h-8 w-8" aria-hidden="true" />
+          <h2 className="text-lg font-semibold text-danger">Analysis failed</h2>
           <p>{status.error_message}</p>
         </div>
       </div>
@@ -69,9 +68,9 @@ export function Results() {
 
   if (status.status !== "completed" || !report) {
     return (
-      <div className="page-narrow">
-        <div className="card state-panel">
-          <span className="spinner spinner-lg" aria-hidden="true" />
+      <div className="mx-auto flex max-w-2xl flex-col gap-5 px-5 py-6 pb-12">
+        <div className="flex flex-col items-center justify-center gap-4 rounded-2xl border border-border bg-surface/60 p-8 text-center text-text-secondary backdrop-blur-md">
+          <Loader2 className="h-8 w-8 animate-spin text-accent" aria-hidden="true" />
           <p>Analyzing... ({status.status})</p>
         </div>
       </div>
@@ -79,88 +78,120 @@ export function Results() {
   }
 
   const missingTests = report.missing_tests as MissingTestRow[];
+  const coverageMatrix = report.coverage_matrix as CoverageRow[];
+  const toolCallTrace = report.tool_call_trace as ToolCallRow[];
   const finalIssueUrl = issueUrl ?? status.github_issue_url;
 
   return (
-    <div className="page-narrow">
-      <div className="card results-header">
+    <div className="mx-auto flex max-w-2xl flex-col gap-5 px-5 py-6 pb-12">
+      <div className="flex flex-wrap items-start justify-between gap-4 rounded-2xl border border-border bg-surface/60 p-5 backdrop-blur-md">
         <div>
-          <h1>{status.repository}#{status.issue_number}</h1>
-          {status.requirement_summary && <p className="card-subtitle">{status.requirement_summary}</p>}
+          <h1 className="text-2xl font-bold tracking-tight text-text">
+            {status.repository}#{status.issue_number}
+          </h1>
+          {status.requirement_summary && (
+            <p className="mt-1 text-text-secondary">{status.requirement_summary}</p>
+          )}
         </div>
-        <div className="coverage-stat">
-          <span className="coverage-stat-value">{status.coverage_summary?.percent_covered ?? "-"}%</span>
-          <span className="coverage-stat-label">Coverage</span>
+        <div className="flex min-w-20 flex-col items-end">
+          <span className="bg-gradient-to-r from-indigo-400 to-violet-500 bg-clip-text text-3xl font-bold leading-tight text-transparent">
+            {status.coverage_summary?.percent_covered ?? "-"}%
+          </span>
+          <span className="text-xs font-semibold uppercase tracking-wide text-text-muted">Coverage</span>
         </div>
       </div>
 
-      <section className="card">
-        <h2>Coverage Matrix</h2>
-        <div className="table-scroll">
-          <table className="data-table">
+      <section className="rounded-2xl border border-border bg-surface/60 p-5 backdrop-blur-md">
+        <h2 className="mb-4 text-lg font-semibold text-text">Coverage Matrix</h2>
+        <div className="overflow-x-auto">
+          <table className="w-full border-collapse text-sm">
             <thead>
               <tr>
-                <th>Criterion</th>
-                <th>Status</th>
-                <th>Explanation</th>
+                <th className="whitespace-nowrap border-b border-border px-3 py-3 text-left text-xs font-semibold uppercase tracking-wide text-text-muted">
+                  Criterion
+                </th>
+                <th className="whitespace-nowrap border-b border-border px-3 py-3 text-left text-xs font-semibold uppercase tracking-wide text-text-muted">
+                  Status
+                </th>
+                <th className="whitespace-nowrap border-b border-border px-3 py-3 text-left text-xs font-semibold uppercase tracking-wide text-text-muted">
+                  Explanation
+                </th>
               </tr>
             </thead>
             <tbody>
-              {(report.coverage_matrix as CoverageRow[]).map((row) => (
-                <tr key={row.criterion_id}>
-                  <td className="mono">{row.criterion_id}</td>
-                  <td><StatusBadge status={row.status} /></td>
-                  <td>{row.explanation}</td>
-                </tr>
+              {coverageMatrix.map((row, i) => (
+                <motion.tr
+                  key={row.criterion_id}
+                  initial={{ opacity: 0, y: 4 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  transition={{ delay: i * 0.04 }}
+                  className="hover:bg-bg"
+                >
+                  <td className="border-b border-border px-3 py-3 align-top font-mono text-xs text-text-secondary">
+                    {row.criterion_id}
+                  </td>
+                  <td className="border-b border-border px-3 py-3 align-top">
+                    <StatusBadge status={row.status} />
+                  </td>
+                  <td className="border-b border-border px-3 py-3 align-top text-text">{row.explanation}</td>
+                </motion.tr>
               ))}
             </tbody>
           </table>
         </div>
       </section>
 
-      <section className="card">
-        <h2>Missing Scenarios</h2>
+      <section className="rounded-2xl border border-border bg-surface/60 p-5 backdrop-blur-md">
+        <h2 className="mb-4 text-lg font-semibold text-text">Missing Scenarios</h2>
         {missingTests.length === 0 ? (
-          <p className="empty-inline">No missing scenarios detected.</p>
+          <p className="text-text-secondary">No missing scenarios detected.</p>
         ) : (
-          <ul className="scenario-list">
+          <ul className="flex flex-col gap-3">
             {missingTests.map((m, i) => (
-              <li key={i}>
-                <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                  <path d="M8 2 14.5 13.5H1.5L8 2Z" />
-                  <path d="M8 6.5v3M8 11.5h.01" />
-                </svg>
+              <motion.li
+                key={i}
+                initial={{ opacity: 0, y: 4 }}
+                animate={{ opacity: 1, y: 0 }}
+                transition={{ delay: i * 0.04 }}
+                className="flex items-start gap-2 text-text"
+              >
+                <AlertTriangle className="mt-0.5 h-4 w-4 flex-shrink-0 text-warning" aria-hidden="true" />
                 {m.behavior}
-              </li>
+              </motion.li>
             ))}
           </ul>
         )}
       </section>
 
-      <section className="card">
-        <h2>Tool Call History</h2>
-        <ul className="trace-list">
-          {(report.tool_call_trace as ToolCallRow[]).map((t, i) => (
-            <li key={i}>
-              <span className="trace-duration">{t.duration_ms}ms</span>
-              <span className="trace-node">{t.node}</span> → {t.tool}
+      <section className="rounded-2xl border border-border bg-surface/60 p-5 backdrop-blur-md">
+        <h2 className="mb-4 text-lg font-semibold text-text">Tool Call History</h2>
+        <ul className="flex flex-col gap-3">
+          {toolCallTrace.map((t, i) => (
+            <li
+              key={i}
+              className="border-b border-dashed border-border pb-2 font-mono text-xs text-text-secondary last:border-b-0 last:pb-0"
+            >
+              <span className="float-right text-text-muted">{t.duration_ms}ms</span>
+              <span className="font-semibold text-text">{t.node}</span> → {t.tool}
             </li>
           ))}
         </ul>
       </section>
 
-      <div className="actions-row">
-        <button
+      <div className="flex flex-wrap items-center gap-3">
+        <motion.button
           onClick={handleCreateIssue}
-          className="btn btn-secondary"
+          whileHover={{ scale: 1.02 }}
+          whileTap={{ scale: 0.98 }}
+          className="inline-flex items-center justify-center gap-2 rounded-md bg-accent/15 px-4 py-3 text-sm font-semibold text-accent transition-colors hover:bg-accent/25 disabled:cursor-not-allowed disabled:opacity-60"
           disabled={!!status.github_issue_url || !!issueUrl}
         >
           Create GitHub issue
-        </button>
+        </motion.button>
       </div>
       {finalIssueUrl && (
-        <p className="issue-link">
-          Issue: <a href={finalIssueUrl}>{finalIssueUrl}</a>
+        <p className="text-text-secondary">
+          Issue: <a href={finalIssueUrl} className="text-accent hover:underline">{finalIssueUrl}</a>
         </p>
       )}
     </div>
