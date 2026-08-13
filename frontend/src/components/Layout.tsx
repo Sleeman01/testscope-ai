@@ -5,12 +5,12 @@ import { cn } from "../lib/cn";
 
 function navLinkClass({ isActive }: { isActive: boolean }) {
   return cn(
-    "relative px-1 py-2 text-sm font-medium no-underline transition-colors duration-[var(--duration-fast)]",
-    "hover:text-text hover:no-underline",
+    "rounded-lg px-4 py-2.5 text-sm font-semibold no-underline transition-all duration-[var(--duration-fast)]",
+    "hover:no-underline",
     "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50 focus-visible:ring-offset-2 focus-visible:ring-offset-bg",
-    isActive ? "text-text" : "text-text-secondary",
-    isActive &&
-      "after:absolute after:inset-x-0 after:-bottom-[17px] after:h-0.5 after:rounded-full after:bg-accent"
+    isActive
+      ? "bg-accent text-white shadow-button hover:bg-accent-strong"
+      : "border border-border bg-surface-elevated text-text-secondary hover:border-accent/40 hover:bg-accent-muted/40 hover:text-text"
   );
 }
 
@@ -24,19 +24,19 @@ export function Layout() {
       >
         Skip to main content
       </a>
-      <header className="sticky top-0 z-10 border-b border-border bg-surface/80 px-5 py-4 shadow-header backdrop-blur-md sm:px-6">
-        <div className="mx-auto flex max-w-5xl flex-wrap items-center justify-between gap-4">
+      <header className="sticky top-0 z-10 border-b border-border/80 bg-surface/90 px-5 py-3 shadow-header backdrop-blur-md sm:px-8">
+        <div className="mx-auto flex max-w-7xl flex-wrap items-center justify-between gap-4">
           <NavLink
             to="/"
             end
             className="flex items-center gap-2.5 text-text no-underline transition-opacity duration-[var(--duration-fast)] hover:opacity-90 hover:no-underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50 focus-visible:ring-offset-2 focus-visible:ring-offset-bg"
           >
-            <span className="flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-md bg-accent text-white shadow-button">
+            <span className="flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-lg bg-accent text-white shadow-button">
               <Radar className="h-4 w-4" aria-hidden="true" />
             </span>
             <span className="text-base font-bold tracking-tight">TestScope</span>
           </NavLink>
-          <nav className="flex gap-6" aria-label="Main navigation">
+          <nav className="flex gap-2 rounded-xl border border-border/60 bg-surface-muted/80 p-1.5" aria-label="Main navigation">
             <NavLink to="/" end className={navLinkClass}>
               New analysis
             </NavLink>
