@@ -1,9 +1,14 @@
 import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
+import { History as HistoryIcon } from "lucide-react";
 import { motion } from "framer-motion";
 import { listAnalyses } from "../api/client";
 import type { AnalysisStatus } from "../api/types";
 import { StatusBadge } from "../components/StatusBadge";
+import { Card } from "../components/ui/Card";
+import { EmptyState } from "../components/ui/EmptyState";
+import { PageContainer } from "../components/ui/PageContainer";
+import { Skeleton } from "../components/ui/Skeleton";
 import { cn } from "../lib/cn";
 
 const MotionLink = motion.create(Link);
@@ -13,8 +18,6 @@ function formatDate(iso: string): string {
   return Number.isNaN(parsed.getTime()) ? iso : parsed.toLocaleString();
 }
 
-// Same success/warning/danger scale used for status pills and Results' stat tiles.
-// Thresholds are this page's own convention — not defined anywhere else in the app.
 function coverageColorClass(pct: number | null | undefined): string {
   if (pct == null) return "text-text-muted";
   if (pct >= 80) return "text-success";
@@ -22,18 +25,18 @@ function coverageColorClass(pct: number | null | undefined): string {
   return "text-danger";
 }
 
-function SkeletonCard() {
+function HistorySkeletonRow() {
   return (
-    <div className="flex animate-pulse items-center justify-between gap-4 rounded-xl bg-surface p-4">
-      <div className="flex flex-col gap-2">
-        <div className="h-4 w-32 rounded bg-border" />
-        <div className="h-3 w-10 rounded bg-border" />
+    <Card variant="bordered" className="flex items-center justify-between gap-4 p-4">
+      <div className="flex flex-1 flex-col gap-2">
+        <Skeleton className="h-4 w-32" />
+        <Skeleton className="h-3 w-10" />
       </div>
       <div className="flex flex-col items-end gap-2">
-        <div className="h-5 w-24 rounded-full bg-border" />
-        <div className="h-6 w-12 rounded bg-border" />
+        <Skeleton className="h-5 w-24 rounded-full" />
+        <Skeleton className="h-6 w-12" />
       </div>
-    </div>
+    </Card>
   );
 }
 
@@ -49,17 +52,18 @@ export function History() {
   }, []);
 
   return (
-    <div className="mx-auto flex max-w-2xl flex-col gap-6 px-5 py-6 pb-12">
-      <h1 className="text-2xl font-bold tracking-tight text-text">Analysis History</h1>
+    <PageContainer maxWidth="4xl">
+      <h1 className="text-title font-bold tracking-tight text-text">Analysis History</h1>
 
       <div className="flex flex-col gap-3">
-        {!loaded && Array.from({ length: 3 }).map((_, i) => <SkeletonCard key={i} />)}
+        {!loaded && Array.from({ length: 3 }).map((_, i) => <HistorySkeletonRow key={i} />)}
 
         {loaded && analyses.length === 0 && (
-          <div className="rounded-2xl bg-surface p-8 text-center text-text-secondary">
-            <p className="font-semibold text-text">No analyses yet</p>
-            <p className="mt-1">Run one from the New analysis page to see it here.</p>
-          </div>
+          <EmptyState
+            icon={<HistoryIcon className="h-5 w-5" aria-hidden="true" />}
+            title="No analyses yet"
+            description="Run one from the New analysis page to see it here."
+          />
         )}
 
         {analyses.map((a, i) => {
@@ -73,7 +77,12 @@ export function History() {
               transition={{ delay: i * 0.04 }}
               whileHover={{ scale: 1.01 }}
               whileTap={{ scale: 0.99 }}
-              className="flex items-center justify-between gap-4 rounded-xl bg-surface p-4 no-underline hover:bg-bg hover:no-underline"
+              className={cn(
+                "flex items-center justify-between gap-4 rounded-xl border border-border bg-surface p-4 no-underline",
+                "transition-colors duration-[var(--duration-fast)]",
+                "hover:border-border hover:bg-surface-elevated hover:shadow-card hover:no-underline",
+                "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/50 focus-visible:ring-offset-2 focus-visible:ring-offset-bg"
+              )}
             >
               <div>
                 <p className="font-bold text-text">{a.repository}</p>
@@ -92,6 +101,6 @@ export function History() {
           );
         })}
       </div>
-    </div>
+    </PageContainer>
   );
 }
