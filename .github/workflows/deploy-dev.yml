@@ -17,6 +17,14 @@ jobs:
       contents: read
       packages: write
     strategy:
+      # Without this, all 4 matrix combinations run as separate concurrent jobs, each doing
+      # its own docker login + push under the same GITHUB_TOKEN identity to the same GHCR
+      # namespace at roughly the same time — a burst of near-simultaneous requests that has
+      # twice tripped GHCR's secondary rate limit right at the final manifest PUT (layers,
+      # which are mostly existence-check HEAD requests, succeed fine; the 4 jobs' manifest
+      # pushes converge in the same window). Serializing removes the burst pattern entirely.
+      # Costs wall-clock time (~4x, sequential instead of parallel) — acceptable for dev CI.
+      max-parallel: 1
       matrix:
         include:
           - service: backend/api
@@ -31,15 +39,50 @@ jobs:
       - uses: actions/checkout@v4
       - uses: docker/login-action@v3
         with: { registry: ghcr.io, username: "${{ github.actor }}", password: "${{ secrets.GITHUB_TOKEN }}" }
-      - run: |
+      - name: Build image
+        run: |
           # ghcr.io (like all OCI registries) requires an all-lowercase repository name;
           # github.repository_owner preserves the GitHub username's actual casing
           # (Sleeman01), which docker build/push reject outright ("repository name must be
           # lowercase"). Lowercase once here rather than hardcoding the owner literally, so
           # this keeps working if the repo is ever renamed or forked under a different owner.
           OWNER_LC=$(echo "${{ github.repository_owner }}" | tr '[:upper:]' '[:lower:]')
+          echo "OWNER_LC=${OWNER_LC}" >> "$GITHUB_ENV"
           docker build -t ghcr.io/${OWNER_LC}/testscope-${{ matrix.image }}:${{ github.sha }} -f ${{ matrix.service }}/Dockerfile .
-          docker push ghcr.io/${OWNER_LC}/testscope-${{ matrix.image }}:${{ github.sha }}
+      - name: Push image
+        # Bounded retry with exponential backoff, scoped to the push only (build failures are
+        # deterministic — retrying a build never helps). GHCR's secondary rate limit is
+        # time-windowed ("wait a few minutes"), so a short backoff is usually enough for it to
+        # clear on its own — but only for that specific failure. Any other push failure (bad
+        # auth, wrong repo, network error) is not something a retry can fix, so the output is
+        # inspected and non-rate-limit errors fail immediately instead of burning all 3
+        # attempts on an error that will never succeed.
+        run: |
+          IMAGE="ghcr.io/${OWNER_LC}/testscope-${{ matrix.image }}:${{ github.sha }}"
+          MAX_ATTEMPTS=3
+          DELAY=30
+          attempt=1
+          while :; do
+            echo "Push attempt ${attempt}/${MAX_ATTEMPTS}: ${IMAGE}"
+            if output=$(docker push "$IMAGE" 2>&1); then
+              echo "$output"
+              echo "Push succeeded on attempt ${attempt}."
+              break
+            fi
+            echo "$output"
+            if ! echo "$output" | grep -qi "rate limit"; then
+              echo "::error::Push failed with a non-rate-limit error — failing fast, not retrying."
+              exit 1
+            fi
+            if [ "$attempt" -ge "$MAX_ATTEMPTS" ]; then
+              echo "::error::Still hitting the secondary rate limit after ${MAX_ATTEMPTS} attempts — giving up."
+              exit 1
+            fi
+            echo "Secondary rate limit hit — waiting ${DELAY}s before retry..."
+            sleep "$DELAY"
+            DELAY=$((DELAY * 2))
+            attempt=$((attempt + 1))
+          done
 
   deploy:
     needs: [build-and-push]
