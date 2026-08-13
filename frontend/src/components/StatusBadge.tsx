@@ -1,3 +1,6 @@
+import { CheckCircle2, XCircle, AlertTriangle, Clock, Circle, type LucideIcon } from "lucide-react";
+import { cn } from "../lib/cn";
+
 type Variant = "success" | "danger" | "warning" | "progress" | "neutral";
 
 function classify(raw: string): Variant {
@@ -9,41 +12,33 @@ function classify(raw: string): Variant {
   return "neutral";
 }
 
-const ICONS: Record<Variant, JSX.Element> = {
-  success: (
-    <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-      <path d="M3 8.5 6.5 12 13 4" />
-    </svg>
-  ),
-  danger: (
-    <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
-      <path d="M4 4l8 8M12 4l-8 8" />
-    </svg>
-  ),
-  warning: (
-    <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-      <path d="M8 2 14.5 13.5H1.5L8 2Z" />
-      <path d="M8 6.5v3M8 11.5h.01" />
-    </svg>
-  ),
-  progress: (
-    <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-      <circle cx="8" cy="8" r="6" />
-      <path d="M8 4.5V8l2.5 1.5" />
-    </svg>
-  ),
-  neutral: (
-    <svg viewBox="0 0 16 16" fill="currentColor">
-      <circle cx="8" cy="8" r="2.5" />
-    </svg>
-  ),
+const ICONS: Record<Variant, LucideIcon> = {
+  success: CheckCircle2,
+  danger: XCircle,
+  warning: AlertTriangle,
+  progress: Clock,
+  neutral: Circle,
+};
+
+const VARIANT_CLASSES: Record<Variant, string> = {
+  success: "bg-success/15 text-success",
+  danger: "bg-danger/15 text-danger",
+  warning: "bg-warning/15 text-warning",
+  progress: "bg-progress/15 text-progress",
+  neutral: "bg-neutral/15 text-neutral",
 };
 
 export function StatusBadge({ status }: { status: string }) {
   const variant = classify(status);
+  const Icon = ICONS[variant];
   return (
-    <span className={`badge badge-${variant}`}>
-      <span aria-hidden="true">{ICONS[variant]}</span>
+    <span
+      className={cn(
+        "inline-flex items-center gap-2 whitespace-nowrap rounded-full px-3 py-1 text-xs font-semibold",
+        VARIANT_CLASSES[variant]
+      )}
+    >
+      <Icon aria-hidden="true" className="h-3.5 w-3.5 flex-shrink-0" />
       <span>{status}</span>
     </span>
   );
