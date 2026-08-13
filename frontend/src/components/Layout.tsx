@@ -1,11 +1,12 @@
 import { AnimatePresence, motion } from "framer-motion";
+import { Radar } from "lucide-react";
 import { NavLink, Outlet, useLocation } from "react-router-dom";
 import { cn } from "../lib/cn";
 
 function navLinkClass({ isActive }: { isActive: boolean }) {
   return cn(
-    "border-b-2 border-transparent px-0 py-2 text-sm font-semibold text-text-secondary no-underline transition-colors hover:text-text hover:no-underline",
-    isActive && "border-accent text-text"
+    "text-sm no-underline transition-colors hover:text-text hover:no-underline",
+    isActive ? "font-bold text-text" : "font-medium text-text-secondary"
   );
 }
 
@@ -13,9 +14,12 @@ export function Layout() {
   const location = useLocation();
   return (
     <>
-      <header className="sticky top-0 z-10 flex flex-wrap items-center justify-between gap-4 border-b border-border bg-surface/60 px-5 py-4 backdrop-blur-md">
-        <NavLink to="/" end className="text-base font-bold tracking-tight text-text no-underline">
-          TestScope AI
+      <header className="sticky top-0 z-10 flex flex-wrap items-center justify-between gap-4 border-b border-border bg-surface px-5 py-4">
+        <NavLink to="/" end className="flex items-center gap-2.5 text-text no-underline hover:no-underline">
+          <span className="flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-[7px] bg-accent text-white">
+            <Radar className="h-4 w-4" aria-hidden="true" />
+          </span>
+          <span className="text-base font-bold tracking-tight">TestScope</span>
         </NavLink>
         <nav className="flex gap-6">
           <NavLink to="/" end className={navLinkClass}>

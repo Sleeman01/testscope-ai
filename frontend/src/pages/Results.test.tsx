@@ -46,7 +46,8 @@ describe("Results", () => {
       tool_call_trace: [], download_url: "https://example.com/report.md",
     });
     renderAt("a2");
-    await waitFor(() => expect(screen.getByText("acme/widgets#42")).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText("acme/widgets")).toBeInTheDocument());
+    expect(screen.getByText("#42")).toBeInTheDocument();
     expect(screen.getByText("-%")).toBeInTheDocument();
   });
 });

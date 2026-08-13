@@ -1,9 +1,9 @@
 import { CheckCircle2, XCircle, AlertTriangle, Clock, Circle, type LucideIcon } from "lucide-react";
 import { cn } from "../lib/cn";
 
-type Variant = "success" | "danger" | "warning" | "progress" | "neutral";
+export type Variant = "success" | "danger" | "warning" | "progress" | "neutral";
 
-function classify(raw: string): Variant {
+export function classify(raw: string): Variant {
   const s = raw.toLowerCase();
   if (s.includes("not covered") || s.includes("fail") || s.includes("missing")) return "danger";
   if (s.includes("partial")) return "warning";
