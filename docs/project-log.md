@@ -53,15 +53,26 @@ root-caused to a kubectl/kustomize version mismatch between the dev machine and 
 control-plane's actual pinned version. Both `dev` and `prod` are now fully live-deployed.
 **Branch pattern in use:** `feature/phase-<N>-<short-description>`, one PR per phase (docs-only
 housekeeping like this entry uses `docs/<short-description>` instead)
-**Current branch:** `docs/task-44-test-plan` (cut fresh from `main` after confirming via
-`gh pr list`/`git fetch` that PR #27 had merged — local `main` was 2 commits behind at session
-start, fast-forwarded first). Phase 11, Task 44 (`docs/test-plan.md`) pre-work: backfilled this
-file's Phase Log with PRs #25–27 (see those entries below), now drafting `docs/test-plan.md`
-itself.
-**Last merged:** PR #27 (`fix/prod-resources-patch-split`, kustomize patch split for the
-kubectl-version mismatch) → `main`, confirmed via `gh pr list`/`git fetch` (PRs #22–26 merged
-before it — see the Post-Phase-10 CI/infra saga note above and their individual Phase Log
-entries).
+**Current branch:** `feature/frontend-dark-mode-redesign` (cut from `main` at `ffa4273`, PR #40).
+Not part of the numbered Task 1–44 sequence — a direct user-requested frontend visual redesign
+(dark-mode restyle of the existing 3-page UI). Design spec + implementation plan + all 7 tasks
+committed; branch pushed and **PR #41 open, not yet merged** as of this entry. See the dedicated
+Phase Log entry below for full detail.
+**Last merged (per this log's own records — see session-start correction below for the real
+gap):** PR #27 (`fix/prod-resources-patch-split`) → `main`. **This log's "Current State" section
+had not been updated since PR #28** (tag `v1.0.3`'s smoke-test confirmation, Phase Log entry
+ending line ~2986) even though `main` itself had advanced 12 more PRs (#29–#40, ending in
+`ffa4273` "remove download button; fix coverage percent clobbered on final upsert") by the time
+this session started. This session did **not** attempt to reconstruct PRs #29–40's content
+(out of scope for a frontend-only task) — flagged here as a known backfill gap for whichever
+session next touches Task 1–44's numbered sequence, per this log's own recurring "verify, don't
+trust the log" pattern (see the Phase 4/5/8/9 session-start corrections below).
+**Session-start correction (this session, frontend redesign):** confirmed via `git log`/`git
+branch --show-current` at session start — `main` was clean and at `ffa4273` (PR #40), 12 commits
+ahead of what this file's "Current branch"/"Last merged" lines last recorded (PR #27/#28). Per
+CLAUDE.md's "don't rely solely on the log's claims" rule, proceeded from the real `git log` state
+rather than the stale log text; branched `feature/frontend-dark-mode-redesign` from that real
+`main`.
 **Session-start correction (Phase 9):** local `main` was 4 commits behind `origin/main` (the PR
 #18 merge happened upstream but hadn't been fetched locally). Confirmed via `gh pr list` (shown
 MERGED) before trusting it, then `git fetch origin` + `git checkout main` +
@@ -3005,3 +3016,60 @@ cases, no duplication of each page's own already-existing coverage.
   `backend/worker` 52/52 passing (suite has grown since Phase 3's 38/38 baseline — expected,
   not a regression).
 - **Outcome:** pushed, PR #42 opened by Claude at the user's explicit request ("push").
+### Frontend dark-mode redesign (PR #41) — ⏳ open, not yet merged
+
+- **Branch:** `feature/frontend-dark-mode-redesign`, cut from `main` at `ffa4273` (PR #40).
+  **Not part of the numbered Task 1–44 sequence** — a direct user request ("build a world-class,
+  modern, high-contrast Web UI") to restyle the existing frontend, arriving via a generic
+  greenfield-assuming prompt that this session first had to reconcile against the real repo
+  state (a working, tested, deployed 3-page frontend already existed from Phase 5/PR #14 plus a
+  later "visual design pass," PR #38).
+- **Process, in full, per CLAUDE.md's deviation/approval rules:** (1) read the design/plan docs
+  and the actual `frontend/` code before proposing anything; (2) flagged in plain chat — not via
+  a tool-mediated prompt, per the Phase 7 standing decision — that the request implied new npm
+  dependencies and possible scope beyond design.md §8's 3 routes; (3) got explicit chat approval
+  for the 5 new dependencies (Tailwind v4, `lucide-react`, `framer-motion`, `clsx`,
+  `tailwind-merge`) and for keeping scope to the existing 3 pages, dark-only, no toggle; (4) ran
+  the brainstorming → writing-plans → executing-plans → finishing-a-development-branch skill
+  chain; design spec written to `docs/2026-08-13-frontend-dark-mode-redesign-design.md`,
+  implementation plan to `docs/superpowers/plans/2026-08-13-frontend-dark-mode-redesign.md`,
+  both committed before any code changed.
+- **Implementation (7 tasks, one commit each, full suite + build re-verified after every one):**
+  Tailwind v4 install + `@theme` dark-token rewrite of `tokens.css` → `cn()` helper + dark
+  `StatusBadge` (lucide icons) → dark glass `Layout` header/nav + `framer-motion`
+  `AnimatePresence` route transitions → `Home` restyle (gradient submit button, lucide spinner)
+  → `Results` restyle (state panels, coverage matrix, staggered-motion missing-scenarios list) →
+  `History` restyle (Tailwind `animate-pulse` skeleton rows, `motion.create(Link)`) → `base.css`
+  deleted entirely, `main.tsx` import cleaned up.
+- **Verified:** `npm test` 10/10 passing after every task (the existing suite queries by
+  role/label/text only, never by class name or color — confirmed by reading all 5 test files
+  before starting, so zero test changes were needed for a pure visual restyle).
+  `npm run build` (`tsc -b && vite build`) green after every task.
+- **Real, minor bug caught mid-implementation:** this `framer-motion` version (`^13.1.0`)
+  deprecates the `motion(Component)` call form in favor of `motion.create(Component)` — surfaced
+  as a console warning during `History`'s test run, fixed immediately (`History.tsx`'s
+  `MotionLink`) before committing that task.
+- **Dependency-audit note, checked and not a regression:** `npm audit` reported 9 findings after
+  installing the 5 new packages, up from design.md §18's documented 7 "as of Task 1's
+  scaffolding." Diffed `package-lock.json` before concluding anything — confirmed none of the
+  pre-existing flagged packages (`vite`, `vitest`, `react-router-dom`, `nanoid`, `esbuild`) had
+  their resolved version changed by this install; the higher count is newer CVEs published
+  against the same already-pinned versions since §18 was written, not something this task
+  introduced. Design.md §18 itself was not updated (out of scope for this branch — a pure
+  documentation refresh of that section, if wanted, should be its own small change).
+- **Known gap, flagged to the user rather than silently skipped: real-browser visual
+  verification could not be completed.** This sandbox has no `sudo` and is missing Chromium's
+  system shared libraries (`libnspr4.so` and likely others `--with-deps` would have pulled in);
+  no `chromium-cli` tool was available either. Substitute evidence gathered instead: the compiled
+  production CSS (`dist/assets/*.css`) was grepped directly and confirmed to contain the exact
+  expected dark-palette hex values (`#0b0f17`, `#0f172a`, `#f8fafc`, the 4 status colors) and
+  `indigo`/`violet` gradient utility classes, with zero remaining occurrences of the old
+  light-theme background (`#f6f6fb`). This is real evidence the Tailwind `@theme` token
+  generation and utility-class usage compiled correctly, but it is **not** a substitute for
+  actually seeing the app rendered — recommended to the user as a follow-up before merging PR
+  #41 (`npm run dev` + click through Home → Results → History locally).
+- **Outcome:** branch pushed, PR #41 opened against `main` by Claude at the user's explicit
+  request ("Push and create a Pull Request" — chosen from the finishing-a-development-branch
+  menu), consistent with the Phase 7 standing decision that PR creation defaults to
+  user-initiated but yields to an explicit ask. **Not yet merged** — pending the user's own
+  browser verification and review.

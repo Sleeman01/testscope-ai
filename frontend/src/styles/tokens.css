@@ -1,48 +1,32 @@
-:root {
-  --color-bg: #f6f6fb;
-  --color-surface: #ffffff;
-  --color-border: #e4e4ee;
-  --color-text: #14141f;
-  --color-text-secondary: #5b5b6b;
-  --color-text-muted: #8a8a9a;
+@import "tailwindcss";
 
-  --color-chrome-bg: #14141f;
-  --color-chrome-text: #eeedf8;
-  --color-chrome-text-muted: #9a97b8;
-  --color-chrome-border: #24243a;
+@theme {
+  /* Colors */
+  --color-bg: #0b0f17;
+  --color-surface: #0f172a;
+  --color-border: #1e293b;
+  --color-text: #f8fafc;
+  --color-text-secondary: #94a3b8;
+  --color-text-muted: #64748b;
+  --color-accent: #6366f1;
+  --color-success: #10b981;
+  --color-warning: #f59e0b;
+  --color-danger: #ef4444;
+  --color-progress: #3b82f6;
+  --color-neutral: #64748b;
 
-  --color-accent: #6d5ef8;
-  --color-accent-hover: #5b4be0;
-  --color-accent-soft: #efecff;
-  --color-accent-contrast: #ffffff;
-
-  --color-success: #16a34a;
-  --color-success-soft: #e7f7ed;
-  --color-danger: #dc2626;
-  --color-danger-soft: #fdecec;
-  --color-warning: #b45309;
-  --color-warning-soft: #fdf3e0;
-  --color-progress: #6d5ef8;
-  --color-progress-soft: #efecff;
-  --color-neutral: #6b7280;
-  --color-neutral-soft: #eef0f3;
-
+  /* Radius — overrides Tailwind's default rounded-sm/md/lg to this project's values */
   --radius-sm: 6px;
   --radius-md: 10px;
   --radius-lg: 16px;
-  --radius-pill: 999px;
 
-  --shadow-sm: 0 1px 2px rgba(20, 20, 31, 0.06);
-  --shadow-md: 0 4px 20px rgba(20, 20, 31, 0.08);
+  /* Spacing — overrides only the 3 slots that diverge from Tailwind's default
+     4px-multiple scale (1-4 already match: 4/8/12/16px) */
+  --spacing-5: 24px;
+  --spacing-6: 32px;
+  --spacing-8: 48px;
 
-  --space-1: 4px;
-  --space-2: 8px;
-  --space-3: 12px;
-  --space-4: 16px;
-  --space-5: 24px;
-  --space-6: 32px;
-  --space-8: 48px;
-
+  /* Fonts */
   --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
   --font-mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
 }
