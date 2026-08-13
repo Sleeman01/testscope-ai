@@ -3073,3 +3073,44 @@ cases, no duplication of each page's own already-existing coverage.
   menu), consistent with the Phase 7 standing decision that PR creation defaults to
   user-initiated but yields to an explicit ask. **Not yet merged** — pending the user's own
   browser verification and review.
+
+  **Update:** merged by the user (along with PR #42) between sessions — confirmed via `git log
+  main` showing both as merge commits before this branch was cut. No further action needed.
+
+### `deploy-dev.yml` GHCR secondary-rate-limit fix — branch pushed, not yet a PR
+
+- **Branch:** `fix/deploy-dev-ghcr-rate-limit`, cut from `main` after confirming PRs #41/#42
+  were both already merged (`git fetch`/`git pull --ff-only` first, per this log's own
+  recurring verify-before-trusting habit). Not part of the numbered Task 1–44 sequence.
+- **Trigger:** user reported `deploy-dev.yml` failing twice at the GHCR manifest-push step with
+  `denied: permission_denied ... "You have exceeded a secondary rate limit"`, and specifically
+  asked for root-cause diagnosis (not a retry band-aid) before any code changed.
+- **Diagnosis (presented to the user and approved before touching anything, per CLAUDE.md):**
+  the `build-and-push` job's matrix (4 images — `api`/`worker`/`mcp-test-analysis`/`frontend`;
+  `mcp-github` is the official third-party image, not built here) had no `max-parallel`, so all
+  4 combinations ran as **concurrent jobs**, each doing its own `docker login`/`push` under the
+  same `GITHUB_TOKEN` identity to the same GHCR namespace at once — a burst pattern that's a
+  textbook secondary-rate-limit trigger. This explained the exact symptom (layers push fine,
+  fails on the final manifest `PUT`: blob-existence checks succeed fast per job, then all 4
+  jobs' manifest pushes converge in the same window) and why re-running after waiting didn't
+  help (a full re-run reproduces the identical 4-way burst).
+- **Fix approved: Option A (`max-parallel: 1`) + Option D (bounded retry, 3 attempts,
+  exponential backoff from 30s, scoped to the push step only).** Options B (path-filtered
+  builds) and C (registry/GHA layer caching) were presented with tradeoffs and explicitly
+  deferred — B risks the `deploy` job's own sed-based tag-rewrite loop needing changes to
+  handle "image not rebuilt this run" correctly (the one mechanism the user said must keep
+  working exactly as-is), and C doesn't address the burst/concurrency mechanism at all.
+- **Retry logic detail:** the push step's output is inspected — only failures containing
+  "rate limit" (case-insensitive) are retried; anything else (genuine auth/permission errors,
+  network failures) fails immediately on the first attempt, per the user's explicit ask to not
+  burn all retries on an error that will never succeed. Verified with a 3-scenario simulation
+  (stub `docker` command, shortened delay) before committing: eventual success after 2
+  rate-limited attempts, exhaustion after 3 persistent rate-limit failures (30s→60s backoff,
+  correct final-attempt message), and immediate fail-fast (0s elapsed, no sleep) on a genuine
+  non-rate-limit error.
+- **Verified:** YAML re-parsed with `python3 -c "import yaml; yaml.safe_load(...)"` — valid.
+  `bash -n` syntax-checked the embedded retry script. The `deploy` job, `kubernetes/`, and
+  image naming/tagging were confirmed untouched via `git diff` before committing, per the
+  user's explicit constraints.
+- **Outcome:** branch pushed only, **no PR opened** — user said they'll open and merge it
+  themselves this time (contrast with PR #41, where they asked Claude to open it).
