@@ -1,6 +1,7 @@
 from unittest.mock import AsyncMock, patch
 
 import pytest
+
 from worker_app.nodes.report_saver import report_saver
 
 
